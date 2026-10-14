@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f8fc">
+  <title>Hirely</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="app">
+    <header class="brand">
+      <img class="brand-logo" src="assets/hirely-logo.png" alt="Hirely: autocompleta tus postulaciones">
+      <div class="brand-caption">Tu perfil, listo para postularte</div>
+    </header>
+
+    <div id="notice" class="notice" role="status" aria-live="polite"></div>
+
+    <section id="login-view" class="login-view">
+      <div class="welcome-art" aria-hidden="true">
+        <span class="spark spark-one">✦</span>
+        <div class="art-document"><span></span><span></span><b>✓</b></div>
+        <span class="spark spark-two">✧</span>
+      </div>
+      <div class="section-heading">
+        <span class="eyebrow">BIENVENIDO/A DE NUEVO</span>
+        <h2>Tu próxima oportunidad<br>empieza aquí.</h2>
+        <p class="muted">Inicia sesión para tener tus datos y respuestas a mano cuando te postules.</p>
+      </div>
+      <form id="login-form" class="form-stack">
+        <label for="email">Correo electrónico</label>
+        <input id="email" type="email" autocomplete="username" required placeholder="tu@correo.com">
+        <label for="password">Contraseña</label>
+        <input id="password" type="password" autocomplete="current-password" required placeholder="Tu contraseña">
+        <button class="primary" type="submit">Iniciar sesión <span aria-hidden="true">→</span></button>
+      </form>
+      <p class="login-note"><span aria-hidden="true">✦</span> Usa la misma cuenta de Hirely que en la página web.</p>
+    </section>
+
+    <section id="home-view" class="home-view" hidden>
+      <div class="userline">
+        <div><span class="eyebrow">TU ESPACIO PERSONAL</span><h2 id="welcome">¡Hola!</h2><p id="user-email" class="muted"></p></div>
+        <button id="logout" class="link-button" type="button">Salir ↗</button>
+      </div>
+      <div class="profile-card">
+        <div class="profile-top"><div class="profile-symbol" aria-hidden="true">✓</div><span class="connected"><i></i> Perfil conectado</span></div>
+        <h3>Tu perfil profesional</h3>
+        <p id="profile-summary" class="muted">Listo para buscar datos</p>
+        <button id="autofill" class="primary" type="button"><span>Autocompletar esta página</span><span aria-hidden="true">→</span></button>
+        <p id="fill-result" class="muted small"></p>
+      </div>
+      <div class="section-title"><div><span class="eyebrow">TU BIBLIOTECA</span><h3>Respuestas guardadas</h3></div><span class="section-symbol" aria-hidden="true">✎</span></div>
+      <p class="muted description">Guarda respuestas reutilizables para preguntas frecuentes de tus postulaciones.</p>
+      <div id="answers-list" class="answers-list"></div>
+      <form id="answer-form" class="answer-form">
+        <h4>Guardar una respuesta</h4>
+        <label for="question">Pregunta</label>
+        <textarea id="question" rows="2" required placeholder="Ej. ¿Por qué quieres trabajar con nosotros?"></textarea>
+        <label for="answer">Respuesta</label>
+        <textarea id="answer" rows="3" required placeholder="Escribe una respuesta que puedas adaptar después"></textarea>
+        <label for="category">Categoría <span class="optional">(opcional)</span></label>
+        <input id="category" type="text" placeholder="Ej. motivación, experiencia">
+        <button class="secondary" type="submit">Guardar respuesta <span aria-hidden="true">＋</span></button>
+      </form>
+    </section>
+
+    <footer><span aria-hidden="true">✦</span> Las respuestas se sugieren para que las revises. Hirely no envía formularios por ti.</footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.test-dist/
+.env
+.DS_Store
+
+# Generados por `npm run build` / `npm run build:web` (fuente única: public/assets y node_modules)
+web-app/assets/
+web-app/vendor/

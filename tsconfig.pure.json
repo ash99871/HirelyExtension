@@ -1,0 +1,15 @@
+{
+  "//": "Compila SOLO la lógica de negocio sin la librería DOM ni tipos de Chrome. Si alguno de estos módulos referencia document, HTMLElement, window o chrome, `npm run typecheck` falla: así el desacoplamiento DOM/negocio queda garantizado por el compilador.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": []
+  },
+  "include": [
+    "src/shared/types.ts",
+    "src/shared/text-similarity.ts",
+    "src/shared/field-mapping.ts",
+    "src/shared/question-detection.ts",
+    "src/shared/question-matching.ts"
+  ]
+}

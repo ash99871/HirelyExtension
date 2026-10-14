@@ -1,0 +1,38 @@
+/* Estilos del asistente. Viven DENTRO del Shadow DOM: los estilos del sitio no entran y estos no salen. */
+:host { all: initial; }
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+.fab {
+  position: fixed; z-index: 2147483646; right: 18px; bottom: 18px;
+  width: 46px; height: 46px; border: 0; border-radius: 50%;
+  background: #635bff; color: #fff; font: 700 20px/1 system-ui, sans-serif;
+  box-shadow: 0 5px 20px #1113; cursor: pointer;
+}
+.fab:focus-visible, .close:focus-visible, .actions button:focus-visible, textarea:focus-visible { outline: 2px solid #635bff; outline-offset: 2px; }
+
+.panel {
+  position: fixed; z-index: 2147483647; right: 16px; bottom: 16px;
+  width: min(390px, calc(100vw - 32px)); max-height: 75vh; overflow: auto;
+  background: #fff; color: #202638; border: 1px solid #dfe3ef; border-radius: 14px;
+  box-shadow: 0 12px 45px #18213b35; font: 13px/1.45 system-ui, sans-serif; padding: 14px;
+}
+.head { display: flex; justify-content: space-between; align-items: center; font-size: 16px; }
+.close { border: 0; background: #f1f2f8; color: #202638; border-radius: 8px; font-size: 20px; cursor: pointer; width: 30px; height: 30px; }
+.status { color: #5d667b; margin: 10px 0; }
+.status[data-tone="error"] { color: #a13d48; }
+.card { border: 1px solid #e1e5ef; border-radius: 10px; padding: 10px; margin-top: 9px; }
+.label { font-weight: 700; margin: 0 0 7px; }
+.badge { font-size: 10px; color: #596176; margin-bottom: 6px; }
+.card textarea {
+  display: block; width: 100%; min-height: 76px; resize: vertical;
+  border: 1px solid #d8ddea; border-radius: 7px; padding: 8px; background: #fff; color: #202638;
+  font: 12px/1.4 system-ui, sans-serif;
+}
+.actions { display: flex; gap: 7px; margin-top: 8px; }
+.actions button { border: 0; border-radius: 7px; padding: 8px 10px; font: 650 12px/1.2 system-ui, sans-serif; cursor: pointer; }
+.actions button:disabled { opacity: .6; cursor: default; }
+.use { background: #635bff; color: #fff; }
+.save { background: #edecff; color: #4438ca; }
+.foot { font-size: 10px; color: #838b9d; margin: 12px 0 0; }
+.empty { margin: 8px 0 0; }
