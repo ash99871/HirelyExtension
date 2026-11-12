@@ -36,7 +36,13 @@ export function detectOpenQuestions(fields: readonly FieldDescriptor[]): Detecte
   return questions;
 }
 
-export function extractQuestionText(fieldContainer: HTMLElement): string {
+/** Subconjunto estructural del DOM: el módulo puro no puede depender de la librería DOM. */
+interface TextContainer {
+  readonly textContent: string | null;
+  querySelector(selectors: string): { readonly textContent: string | null } | null;
+}
+
+export function extractQuestionText(fieldContainer: TextContainer): string {
   const labelEl = fieldContainer.querySelector(
     'label, .question-text, .form-label, [data-testid*="label"]'
   );

@@ -7,17 +7,19 @@
  * Regla: ningún error debe escapar de este archivo. Todo punto de entrada está protegido y
  * los fallos se muestran en el panel con un mensaje entendible.
  */
-import { getOwnProfile } from "../shared/profile-service";
+import { getEducationRows, getOwnProfile } from "../shared/profile-service";
 import { listSavedAnswers, saveAnswer } from "../shared/answers-service";
 import { HirelyError, userMessage } from "../shared/errors";
 import { matchFieldsToValues, resolveAutofillValues, type AutofillValues } from "../shared/field-mapping";
+import { resolveComplementaryValues, type ComplementaryValues } from "../shared/complementary-data";
 import { detectOpenQuestions } from "../shared/question-detection";
 import { attachSuggestionsCooperative } from "../shared/question-matching";
 import { getFreshSession } from "../shared/session";
 import { assertExtensionAlive } from "../shared/storage";
 import { describeError, log } from "../shared/logger";
-import type { QuestionSuggestion, SavedAnswer } from "../shared/types";
+import type { JsonRecord, QuestionSuggestion, SavedAnswer } from "../shared/types";
 import { applyFieldMatches, fillElement, scanFormFields, type FillableElement } from "./dom-fields";
+import { fillComplementaryModal, isInside, summarizeComplementary } from "./complementary-form";
 import { mountAssistantUi, type AssistantUi, type QuestionCard } from "./assistant-ui";
 import { yieldToMain } from "./scheduling";
 
@@ -33,6 +35,7 @@ let running = false;
 
 interface AssistantData {
   readonly values: AutofillValues;
+  readonly complementary: ComplementaryValues;
   readonly answers: SavedAnswer[];
 }
 
@@ -49,8 +52,17 @@ async function loadAssistantData(): Promise<AssistantData | null> {
     })
   ]);
   if (!profile) throw new HirelyError("NOT_FOUND");
+  // El nivel de estudios vive en otra tabla: si falla, el resto del autocompletado sigue funcionando.
+  const profileId = String(profile["id"] ?? "");
+  const education = profileId
+    ? await getEducationRows(profileId).catch((): JsonRecord[] => [])
+    : [];
   // Del perfil completo solo se conserva lo necesario para autocompletar.
-  return { values: resolveAutofillValues(profile), answers };
+  return {
+    values: resolveAutofillValues(profile),
+    complementary: resolveComplementaryValues(profile, education),
+    answers
+  };
 }
 
 async function runAssistant(): Promise<void> {
@@ -68,7 +80,11 @@ async function runAssistant(): Promise<void> {
       return;
     }
 
-    const scan = await scanFormFields();
+    // Primero el modal de datos complementarios (controles que requieren clics); el resto de la página después.
+    const complementary = await fillComplementaryModal(data.complementary);
+    if (!panel.isPanelOpen()) return;
+    const modal = complementary.modal;
+    const scan = await scanFormFields(document, { exclude: el => modal !== null && isInside(modal, el) });
     const matches = matchFieldsToValues(data.values, scan.fields);
     const report = applyFieldMatches(matches, scan.elements);
 
@@ -80,7 +96,7 @@ async function runAssistant(): Promise<void> {
 
     run = { elements: scan.elements, questions: new Map(suggestions.map(item => [item.fieldId, item])) };
     log.info("assistant.done", { fields: scan.fields.length, filled: report.filled.size, questions: questions.length, truncated: scan.truncated });
-    panel.setStatus(`Autocompletado: ${report.filled.size} campo(s). Preguntas abiertas detectadas: ${questions.length}.`);
+    panel.setStatus(`Autocompletado: ${report.filled.size} campo(s).${summarizeComplementary(complementary)} Preguntas abiertas detectadas: ${questions.length}.`);
     panel.renderQuestions(suggestions.map(toCard));
   } catch (error) {
     log.warn("assistant.failed", describeError(error));

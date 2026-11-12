@@ -151,10 +151,12 @@ function readOptions(select: HTMLSelectElement): FieldOption[] {
 }
 
 /** `checkVisibility` (Chrome 105+) descarta display:none/visibility:hidden: evita rellenar honeypots. */
-function isRendered(element: Element): boolean {
+export function isRendered(element: Element): boolean {
   if (element.getAttribute("aria-hidden") === "true") return false;
   const check = (element as Element & { checkVisibility?: () => boolean }).checkVisibility;
-  return typeof check === "function" ? check.call(element) : true;
+  if (typeof check === "function") return check.call(element);
+  // Sin motor de layout (p. ej. jsdom): un ancestro oculto por atributo o estilo cuenta como no visible.
+  return !element.closest('[hidden], [style*="display: none"], [style*="display:none"]');
 }
 
 function isUsable(element: FillableElement): boolean {
@@ -181,7 +183,12 @@ function describeElement(element: FillableElement, id: string, labelIndex: Label
  * Recorre el formulario en lotes de ~8 ms cediendo el hilo entre ellos, para que un formulario
  * enorme no congele la página. Máximo MAX_FIELDS campos por ejecución.
  */
-export async function scanFormFields(root: ParentNode = document): Promise<FormScan> {
+export interface ScanOptions {
+  /** Elementos que el escáner genérico debe ignorar (p. ej. controles que ya maneja otro adaptador). */
+  readonly exclude?: (element: Element) => boolean;
+}
+
+export async function scanFormFields(root: ParentNode = document, options: ScanOptions = {}): Promise<FormScan> {
   const fields: FieldDescriptor[] = [];
   const elements = new Map<string, FillableElement>();
   let truncated = false;
@@ -210,6 +217,7 @@ export async function scanFormFields(root: ParentNode = document): Promise<FormS
         truncated = true;
         break;
       }
+      if (options.exclude?.(element)) continue;
       if (!isUsable(element)) continue;
       const id = `hf-${fields.length + 1}`;
       fields.push(describeElement(element, id, labelContext));

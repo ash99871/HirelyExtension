@@ -55,8 +55,10 @@ function setup(opts: { offline?: boolean } = {}): Harness {
     const url = String(input instanceof Request ? input.url : input);
     requests.push(url);
     if (opts.offline) throw new TypeError("Failed to fetch");
-    const body = url.includes("/profiles")
-      ? { user_id: "u1", first_name: "Ana", last_name: "Pérez", email: "ana@x.co", current_country: "Colombia", education: [{ secret: "no debe salir" }] }
+    const body = url.includes("/education")
+      ? []
+      : url.includes("/profiles")
+      ? { id: "p1", user_id: "u1", first_name: "Ana", last_name: "Pérez", email: "ana@x.co", current_country: "Colombia", education: [{ secret: "no debe salir" }] }
       : [{ id: "a1", user_id: "u1", question_text: "¿Por qué quieres trabajar con nosotros?", answer_text: "Porque admiro su misión.", category: "motivación", context: null, created_at: "", updated_at: "" }];
     return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
   };
@@ -112,7 +114,8 @@ test("bundle de producción: monta la UI, rellena el formulario y sugiere respue
   assert.equal(h.shadow().querySelectorAll(".card").length, 0);
 
   // Solo se consultaron las 2 tablas esperadas, con la URL inyectada en build.
-  assert.deepEqual(h.requests.map(u => new URL(u).pathname), ["/rest/v1/profiles", "/rest/v1/saved_answers"]);
+  assert.deepEqual(h.requests.map(u => new URL(u).pathname), ["/rest/v1/profiles", "/rest/v1/saved_answers", "/rest/v1/education"]);
+  assert.match(h.requests.find(u => u.includes("/education"))!, /profile_id=eq\.p1/, "estudios filtrados por el perfil propio");
   assert.ok(h.requests.every(u => u.startsWith("https://testproj.supabase.co/")));
 });
 

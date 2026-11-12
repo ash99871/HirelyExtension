@@ -110,6 +110,31 @@ En Chrome: `chrome://extensions` → **Modo de desarrollador** → **Cargar desc
 | `content.js` (se inyecta en cada página) | 805 KB | 161 KB | **42 KB** |
 | `popup.js` | 795 KB | 140 KB | **30 KB** |
 
+## Magneto: datos complementarios
+
+Al pulsar el botón de la extensión en el modal «Completa los siguientes datos para terminar tu aplicación a la vacante», se rellenan los campos con datos de tu perfil de Hirely.
+
+| Campo del modal | Dato en Supabase | Cómo se usa |
+|---|---|---|
+| Sector o sectores laborales (lista cerrada) | `profiles.desired_area` (texto libre) | Coincidencia exacta; si no existe, se elige la opción con más palabras en común y se marca para revisar. Si no hay coincidencia clara, no se elige nada. |
+| Cargo | `profiles.desired_position` | Se escribe y se elige la sugerencia. Igual que Sector: coincidencia exacta primero; si no existe, la opción con más palabras en común, marcada para revisar. |
+| Último nivel de estudios | `education.level`, `education.degree`, `education.program` | Se clasifica por cómo empieza el título («Tecnólogo/a en…», «Técnico/a en…», «Bachiller…»; lo que viene después de «en» no cambia el tipo): primaria → «Básica primaria»; especialización, maestría, doctorado, MBA o una especialidad médica (cardiología, cirugía general, medicina interna…) → «Especialización/Maestría»; tecnólogo, técnico o bachiller → su nombre; cualquier otro título → «Profesional». Si hay varios estudios, gana el más alto. |
+| Salario | `profiles.salary_expectation` | Solo dígitos: «2000000.00» → 2000000 |
+| Modalidad: Remoto / Híbrido | `profiles.work_modality` (desplegable) | Solo Remoto e Híbrido; «Presencial» se ignora |
+| Disponible para viajar / cambio de domicilio | `willing_to_travel`, `willing_to_relocate` | Si es verdadero |
+| Tiempo completo, Medio tiempo, Por horas, Jornada diurna… | `work_schedule` y `schedule_availability` (texto libre) | Por palabras clave; «Inmediata» no produce ninguna opción |
+
+Reglas:
+
+- Lo que no coincide claramente aparece en el panel como «Revisar». La extensión no adivina.
+- Sector y Cargo usan la misma lógica: coincidencia exacta primero, y si no existe, la opción con más palabras en común. Antes solo Sector tenía ese respaldo; Cargo se rendía si la sugerencia no empezaba exactamente por el texto escrito, por ejemplo si Magneto reordenaba las palabras.
+- Magneto pone los puntos de miles solo, así que el salario se envía sin separadores.
+- La discapacidad nunca se rellena: la responde siempre la persona.
+- Magneto usa desplegables «select2»: un botón visible con el texto y un `<input>` oculto con el nombre real del campo. La extensión abre el botón, nunca el `<input>` oculto.
+- Las tarjetas de modalidad marcadas tienen la clase `…--selected___xxx`. Si ya están marcadas, no se vuelven a pulsar.
+- Pendiente: la ciudad («¿Dónde quieres trabajar?») necesita saber qué columna de Hirely usar (`preferred_work_locations.city` o `current_city`) y cómo se escriben las ciudades en la lista de Magneto.
+- Pendiente: confirmar las opciones exactas del desplegable de nivel de estudios de Magneto («Bachiller», «Técnico», «Tecnólogo», «Profesional»). Si el texto no coincide, aparece como «Revisar».
+
 ## Límites conocidos
 
 - **No probado en un Chrome real ni contra tu Supabase.** Se verificó con 50 tests (incluido el bundle de producción ejecutado sobre jsdom con `fetch` simulado). Prueba el flujo completo en un formulario real.
