@@ -1,7 +1,7 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { installDom } from "./helpers/dom";
-import { fillComplementaryModal } from "../src/content/complementary-form";
+import { authorizedComplementaryValues, fillComplementaryModal, planComplementaryModal } from "../src/content/complementary-form";
 import { resolveComplementaryValues } from "../src/shared/complementary-data";
 
 /*
@@ -193,4 +193,36 @@ test("Magneto real: salario y 'Siguiente' (que nunca se pulsa); Moneda/Frecuenci
   assert.equal(byId("moneda-btn").textContent?.includes("COP"), true);
   assert.equal(clicks["moneda-hidden"] ?? 0, 0);
   assert.equal(clicks["frec-hidden"] ?? 0, 0);
+});
+
+/* ----------------------------- autorización ----------------------------- */
+
+test("autorización: el plan del modal no hace clics ni escribe, y omite lo que ya está marcado", () => {
+  const plan = planComplementaryModal(resolveComplementaryValues(profile, education));
+  assert.ok(plan.modal, "encuentra el modal");
+  assert.equal(Object.keys(clicks).length, 0, "planear no hace ningún clic");
+  assert.equal((byId("salary") as HTMLInputElement).value, "0", "planear no escribe el salario");
+  assert.deepEqual(plan.items.map(item => `${item.target}=${item.value}`), [
+    "Sector=Salud",
+    "Cargo=Auxiliar Contable",
+    "Nivel de estudios=Tecnólogo",
+    "Salario=2000000",
+    "Opción=Disponible para viajar",
+    "Opción=Tiempo completo"
+  ], "«Híbrido» ya estaba marcado: no se ofrece");
+});
+
+test("autorización: solo se llena lo aprobado, con el valor editado; lo demás no se toca", async () => {
+  const plan = planComplementaryModal(resolveComplementaryValues(profile, education));
+  const approved = plan.items
+    .filter(item => item.target === "Salario" || item.value === "Disponible para viajar")
+    .map(item => (item.target === "Salario" ? { ...item, value: "$ 2.500.000" } : item));
+  const result = await fillComplementaryModal(authorizedComplementaryValues(approved), { waitMs: 0 });
+
+  assert.equal((byId("salary") as HTMLInputElement).value, "2500000", "salario editado, solo dígitos");
+  assert.equal(byId("travel").classList.contains(SELECTED), true);
+  assert.equal(byId("sector-text").textContent, "Selecciona sectores laborales", "Sector no autorizado: intacto");
+  assert.equal(clicks["sector-btn"] ?? 0, 0);
+  assert.equal(clicks.full ?? 0, 0, "Tiempo completo no autorizado: sin clic");
+  assert.deepEqual(result.steps.map(step => step.target), ["Salario", "Opción: Disponible para viajar"]);
 });

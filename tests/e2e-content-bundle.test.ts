@@ -29,8 +29,8 @@ interface Harness {
   requests: string[]; store: Map<string, unknown>;
 }
 
-function setup(opts: { offline?: boolean } = {}): Harness {
-  const dom = new JSDOM(`<!doctype html><body>${FORM}</body>`, { runScripts: "outside-only", url: "https://jobs.example.com/apply", pretendToBeVisual: true });
+function setup(opts: { offline?: boolean; extraHtml?: string } = {}): Harness {
+  const dom = new JSDOM(`<!doctype html><body>${FORM}${opts.extraHtml ?? ""}</body>`, { runScripts: "outside-only", url: "https://jobs.example.com/apply", pretendToBeVisual: true });
   const w = dom.window as unknown as Record<string, unknown> & { eval(code: string): unknown; Element: typeof Element };
   let shadow: ShadowRoot | undefined;
   const original = w.Element.prototype.attachShadow;
@@ -58,7 +58,7 @@ function setup(opts: { offline?: boolean } = {}): Harness {
     const body = url.includes("/education")
       ? []
       : url.includes("/profiles")
-      ? { id: "p1", user_id: "u1", first_name: "Ana", last_name: "Pérez", email: "ana@x.co", current_country: "Colombia", education: [{ secret: "no debe salir" }] }
+      ? { id: "p1", user_id: "u1", first_name: "Ana", last_name: "Pérez", email: "ana@x.co", current_country: "Colombia", birth_date: "1998-03-15", education: [{ secret: "no debe salir" }] }
       : [{ id: "a1", user_id: "u1", question_text: "¿Por qué quieres trabajar con nosotros?", answer_text: "Porque admiro su misión.", category: "motivación", context: null, created_at: "", updated_at: "" }];
     return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
   };
@@ -90,6 +90,13 @@ test("bundle de producción: monta la UI, rellena el formulario y sugiere respue
   assert.equal(responded, 1, "responde al popup (evita «message port closed»)");
 
   const status = () => h.shadow().querySelector(".status")?.textContent ?? "";
+  // Antes de llenar nada, pide autorización mostrando los datos encontrados.
+  await waitFor(() => !!h.shadow().querySelector(".authorize"));
+  assert.equal((doc.getElementById("fn") as HTMLInputElement).value, "", "nada se llena antes de autorizar");
+  assert.equal((doc.getElementById("co") as HTMLSelectElement).value, "");
+  assert.deepEqual(consentRows(h), ["Nombre=Ana", "Correo electrónico=ana@x.co", "País=Colombia"], "el select muestra el texto, no «CO»");
+  assert.equal(h.shadow().querySelector(".authorize")!.textContent, "Autorizar y llenar (3)");
+  h.shadow().querySelector<HTMLButtonElement>(".authorize")!.click();
   await waitFor(() => status().startsWith("Autocompletado"));
 
   assert.equal((doc.getElementById("fn") as HTMLInputElement).value, "Ana");
@@ -117,6 +124,108 @@ test("bundle de producción: monta la UI, rellena el formulario y sugiere respue
   assert.deepEqual(h.requests.map(u => new URL(u).pathname), ["/rest/v1/profiles", "/rest/v1/saved_answers", "/rest/v1/education"]);
   assert.match(h.requests.find(u => u.includes("/education"))!, /profile_id=eq\.p1/, "estudios filtrados por el perfil propio");
   assert.ok(h.requests.every(u => u.startsWith("https://testproj.supabase.co/")));
+});
+
+/** Filas de la lista de autorización como «Etiqueta=valor». */
+function consentRows(h: Harness): string[] {
+  return [...h.shadow().querySelectorAll<HTMLElement>(".consent-row")].map(row => {
+    const label = row.querySelector(".consent-label")!.textContent;
+    const value = row.querySelector<HTMLInputElement>(".consent-value")?.value ?? row.querySelector(".consent-fixed")!.textContent;
+    return `${label}=${value}`;
+  });
+}
+
+async function startAndWaitForConsent(extraHtml = ""): Promise<{ h: Harness; doc: Document; status: () => string }> {
+  const code = await compileContentScript();
+  const h = setup({ extraHtml });
+  (h.dom.window as unknown as { eval(c: string): void }).eval(code);
+  h.listeners[0]!({ type: "HIRELY_AUTOFILL" }, { id: "ext" }, () => undefined);
+  await waitFor(() => !!h.shadow().querySelector(".authorize"));
+  return { h, doc: h.dom.window.document, status: () => h.shadow().querySelector(".status")?.textContent ?? "" };
+}
+
+test("autorización: solo llena lo marcado y con el valor que la persona corrigió", async () => {
+  const { h, doc, status } = await startAndWaitForConsent();
+  const rows = [...h.shadow().querySelectorAll<HTMLElement>(".consent-row")];
+  // Corrige el nombre y desmarca el correo.
+  const name = rows[0]!.querySelector<HTMLInputElement>(".consent-value")!;
+  name.value = "Ana María";
+  const emailCheck = rows[1]!.querySelector<HTMLInputElement>(".consent-check")!;
+  emailCheck.click();
+  assert.equal(emailCheck.checked, false);
+  assert.equal(h.shadow().querySelector(".authorize")!.textContent, "Autorizar y llenar (2)");
+  assert.equal(rows[2]!.querySelector(".consent-value"), null, "un <select> no se edita como texto");
+
+  h.shadow().querySelector<HTMLButtonElement>(".authorize")!.click();
+  await waitFor(() => status().startsWith("Autocompletado"));
+  assert.equal((doc.getElementById("fn") as HTMLInputElement).value, "Ana María");
+  assert.equal((doc.getElementById("em") as HTMLInputElement).value, "", "desmarcado: no se llena");
+  assert.equal((doc.getElementById("co") as HTMLSelectElement).value, "CO");
+  assert.equal(status(), "Autocompletado: 2 campo(s). Preguntas abiertas detectadas: 2.");
+});
+
+test("autorización: «Quitar todos» deja el botón deshabilitado; «Cancelar» no llena nada y sigue sugiriendo respuestas", async () => {
+  const { h, doc, status } = await startAndWaitForConsent();
+  const toggle = h.shadow().querySelector<HTMLButtonElement>(".toggle-all")!;
+  assert.equal(toggle.textContent, "Quitar todos");
+  toggle.click();
+  assert.equal(h.shadow().querySelector<HTMLButtonElement>(".authorize")!.disabled, true);
+  toggle.click();
+  assert.equal(h.shadow().querySelector<HTMLButtonElement>(".authorize")!.disabled, false);
+
+  h.shadow().querySelector<HTMLButtonElement>(".cancel")!.click();
+  await waitFor(() => status().startsWith("No se llenó"));
+  assert.equal(status(), "No se llenó ningún campo. Preguntas abiertas detectadas: 2.");
+  for (const id of ["fn", "em", "co"]) assert.equal((doc.getElementById(id) as HTMLInputElement).value, "", `${id} sin llenar`);
+  assert.equal(h.shadow().querySelectorAll(".card").length, 2, "las preguntas abiertas siguen disponibles");
+});
+
+test("autorización: cerrar el panel mientras pregunta equivale a no autorizar", async () => {
+  const { h, doc } = await startAndWaitForConsent();
+  h.shadow().querySelector<HTMLButtonElement>(".close")!.click();
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal((doc.getElementById("fn") as HTMLInputElement).value, "");
+  assert.equal(h.shadow().querySelector(".consent"), null);
+  // Se puede volver a abrir y vuelve a preguntar.
+  h.listeners[0]!({ type: "HIRELY_AUTOFILL" }, { id: "ext" }, () => undefined);
+  await waitFor(() => !!h.shadow().querySelector(".authorize"));
+});
+
+/** Fecha de nacimiento como la dibuja Magneto: 8 casillas de un dígito (DD MM AAAA). */
+const BIRTH_DATE = `<div class="birth"><p>Fecha de nacimiento</p><div>${
+  Array.from({ length: 8 }, (_, i) => `<input class="d" data-i="${i}" maxlength="1" inputmode="numeric">`).join("")
+}</div></div>`;
+const birthDigits = (doc: Document) => [...doc.querySelectorAll<HTMLInputElement>("input.d")].map(input => input.value).join("");
+
+test("autorización: la fecha de nacimiento de Magneto se pregunta y solo se llena si se autoriza", async () => {
+  const { h, doc, status } = await startAndWaitForConsent(BIRTH_DATE);
+  assert.ok(consentRows(h).includes("Fecha de nacimiento=15/03/1998"), "aparece en la lista como DD/MM/AAAA");
+  assert.equal(consentRows(h).filter(row => row.startsWith("Fecha")).length, 1, "las 8 casillas no salen como campos sueltos");
+  assert.equal(birthDigits(doc), "", "nada se escribe antes de autorizar");
+
+  h.shadow().querySelector<HTMLButtonElement>(".authorize")!.click();
+  await waitFor(() => status().startsWith("Autocompletado"));
+  assert.equal(birthDigits(doc), "15031998");
+  assert.match(status(), /^Autocompletado: 4 campo\(s\)\./);
+});
+
+test("autorización: fecha de nacimiento desmarcada no se llena; corregida se llena con el valor nuevo", async () => {
+  {
+    const { h, doc, status } = await startAndWaitForConsent(BIRTH_DATE);
+    const row = [...h.shadow().querySelectorAll<HTMLElement>(".consent-row")].find(r => r.textContent!.includes("Fecha de nacimiento"))!;
+    row.querySelector<HTMLInputElement>(".consent-check")!.click();
+    h.shadow().querySelector<HTMLButtonElement>(".authorize")!.click();
+    await waitFor(() => status().startsWith("Autocompletado"));
+    assert.equal(birthDigits(doc), "", "desmarcada: casillas vacías");
+  }
+  {
+    const { h, doc, status } = await startAndWaitForConsent(BIRTH_DATE);
+    const row = [...h.shadow().querySelectorAll<HTMLElement>(".consent-row")].find(r => r.textContent!.includes("Fecha de nacimiento"))!;
+    row.querySelector<HTMLInputElement>(".consent-value")!.value = "02/11/1999";
+    h.shadow().querySelector<HTMLButtonElement>(".authorize")!.click();
+    await waitFor(() => status().startsWith("Autocompletado"));
+    assert.equal(birthDigits(doc), "02111999", "usa la fecha corregida");
+  }
 });
 
 test("bundle de producción: sin internet muestra un mensaje claro, no rompe y conserva la sesión", async () => {

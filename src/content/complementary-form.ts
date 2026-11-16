@@ -395,6 +395,87 @@ async function pickChoice(wanted: string, modal: Element, waitMs: number): Promi
   return isSelected(after) ? "selected" : "clicked-unverified";
 }
 
+/* ------------------------------ plan (solo lectura) ------------------------------ */
+
+export type ComplementaryPlanKey = ComplementaryKey | "preference";
+
+/** Algo que se PODRÍA llenar en el modal. Se muestra a la persona para que lo autorice. */
+export interface ComplementaryPlanItem {
+  readonly key: ComplementaryPlanKey;
+  /** Nombre del campo para el panel («Sector», «Salario», «Opción»…). */
+  readonly target: string;
+  /** Valor que se escribiría o elegiría. Para una opción, su texto («Remoto»). */
+  readonly value: string;
+}
+
+export interface ComplementaryPlan {
+  readonly modal: Element | null;
+  readonly items: readonly ComplementaryPlanItem[];
+}
+
+const PLAN_TARGETS: Readonly<Record<ComplementaryKey, string>> = {
+  sector: "Sector",
+  job_title: "Cargo",
+  education_level: "Nivel de estudios",
+  salary: "Salario"
+};
+
+const PLAN_VALUES: Readonly<Record<ComplementaryKey, (values: ComplementaryValues) => string>> = {
+  sector: values => values.sector,
+  job_title: values => values.jobTitle,
+  education_level: values => values.educationLevel,
+  salary: values => values.salary
+};
+
+/** ¿El control ya tiene ese valor (o, en el salario, cualquier monto distinto de 0)? */
+function controlAlreadyHas(key: ComplementaryKey, control: HTMLElement, value: string): boolean {
+  const text = currentText(control);
+  if (key === "salary") {
+    const digits = text.replace(/\D/g, "");
+    return digits !== "" && digits !== "0";
+  }
+  return normalizeText(text).includes(normalizeText(value)) && normalizeText(value) !== "";
+}
+
+/**
+ * Qué se llenaría en el modal, SIN tocar nada: no abre listas, no escribe, no hace clic.
+ * Omite lo que no tiene valor en el perfil, lo que no tiene control en la página y lo que ya está puesto.
+ */
+export function planComplementaryModal(values: ComplementaryValues): ComplementaryPlan {
+  const modal = findComplementaryModal();
+  if (!modal) return { modal: null, items: [] };
+
+  const controls = locateControls(modal);
+  const items: ComplementaryPlanItem[] = [];
+  for (const key of Object.keys(PLAN_TARGETS) as ComplementaryKey[]) {
+    const value = PLAN_VALUES[key](values);
+    const control = controls.get(key);
+    if (!value || !control || controlAlreadyHas(key, control, value)) continue;
+    items.push({ key, target: PLAN_TARGETS[key], value });
+  }
+  for (const preference of values.workPreferences) {
+    const option = findOption(preference, { modal, anywhere: false });
+    if (!option || isSelected(option)) continue;
+    items.push({ key: "preference", target: "Opción", value: preference });
+  }
+  return { modal, items };
+}
+
+/**
+ * Valores para `fillComplementaryModal` con SOLO lo que la persona autorizó (y como lo editó).
+ * Lo que no aparece en `approved` queda vacío y, por tanto, no se toca.
+ */
+export function authorizedComplementaryValues(approved: readonly ComplementaryPlanItem[]): ComplementaryValues {
+  const pick = (key: ComplementaryKey): string => approved.find(item => item.key === key)?.value.trim() ?? "";
+  return {
+    sector: pick("sector"),
+    jobTitle: pick("job_title"),
+    educationLevel: pick("education_level"),
+    salary: pick("salary").replace(/\D/g, ""),
+    workPreferences: approved.filter(item => item.key === "preference").map(item => item.value)
+  };
+}
+
 /* ------------------------------ punto de entrada ------------------------------ */
 
 async function runStep(

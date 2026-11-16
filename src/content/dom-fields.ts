@@ -301,10 +301,8 @@ export function applyFieldMatches(matches: readonly FieldMatch[], elements: Read
  * DD/MM/AAAA mediante ocho inputs independientes de un solo carácter. No se
  * agregan al escaneo genérico porque cada input, por separado, no es una fecha.
  */
-export function fillMagnetoBirthDate(rawValue: string): boolean {
-  const digits = normalizeBirthDateDigits(rawValue);
-  if (!digits) return false;
-
+/** Grupo de 8 casillas VACÍAS de la fecha de nacimiento de Magneto, o null. Solo lee: no escribe nada. */
+export function findMagnetoBirthDateGroup(): HTMLInputElement[] | null {
   const roots: ParentNode[] = [document];
   const visited = new Set<ParentNode>(roots);
   for (let index = 0; index < roots.length; index++) {
@@ -334,25 +332,41 @@ export function fillMagnetoBirthDate(rawValue: string): boolean {
           'input[maxlength="1"][inputmode="numeric"]'
         ));
         if (group.length !== 8 || group.some(input => !isUsable(input))) continue;
-        if (group.some(input => input.value.trim() !== "")) return false;
-
-        for (let i = 0; i < group.length; i++) {
-          const input = group[i]!;
-          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-          if (setter) setter.call(input, digits[i]);
-          else input.value = digits[i]!;
-          input.dispatchEvent(new InputEvent("input", {
-            bubbles: true, composed: true, inputType: "insertText", data: digits[i]!
-          }));
-          input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-        }
-        group[group.length - 1]!.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
-        group[group.length - 1]!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
-        return true;
+        // Si la persona ya escribió algo, no se ofrece ni se toca.
+        if (group.some(input => input.value.trim() !== "")) return null;
+        return group;
       }
     }
   }
-  return false;
+  return null;
+}
+
+/** Fecha del perfil para mostrarla en la autorización: «1998-03-15» → «15/03/1998». null si no es válida. */
+export function formatBirthDate(rawValue: string): string | null {
+  const digits = normalizeBirthDateDigits(rawValue);
+  return digits ? `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}` : null;
+}
+
+/** Escribe la fecha en las 8 casillas. Acepta AAAA-MM-DD, DD/MM/AAAA o DDMMAAAA. */
+export function fillMagnetoBirthDate(rawValue: string, group: HTMLInputElement[] | null = findMagnetoBirthDateGroup()): boolean {
+  const digits = normalizeBirthDateDigits(rawValue);
+  if (!digits || !group || group.length !== 8) return false;
+  // Se vuelve a comprobar: la página pudo cambiar entre la autorización y el llenado.
+  if (group.some(input => !input.isConnected || !isUsable(input) || input.value.trim() !== "")) return false;
+
+  for (let i = 0; i < group.length; i++) {
+    const input = group[i]!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (setter) setter.call(input, digits[i]);
+    else input.value = digits[i]!;
+    input.dispatchEvent(new InputEvent("input", {
+      bubbles: true, composed: true, inputType: "insertText", data: digits[i]!
+    }));
+    input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+  }
+  group[group.length - 1]!.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+  group[group.length - 1]!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  return true;
 }
 
 function normalizeDateLabel(value: string): string {

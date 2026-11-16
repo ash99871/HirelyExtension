@@ -19,6 +19,23 @@ export interface QuestionCard {
   readonly similarity?: number;
 }
 
+/** Un dato que Hirely encontró para un campo y que la persona debe autorizar antes de llenarlo. */
+export interface ConsentItem {
+  readonly id: string;
+  /** Nombre del campo tal como lo ve la persona. */
+  readonly label: string;
+  /** Valor que se llenaría. */
+  readonly value: string;
+  /** `false` para listas cerradas (<select>, opciones): solo se acepta o se quita. */
+  readonly editable: boolean;
+}
+
+/** Lo que la persona autorizó: el id del dato y el valor final (quizá editado). */
+export interface ConsentApproval {
+  readonly id: string;
+  readonly value: string;
+}
+
 export interface AssistantUiHandlers {
   onLaunch(): void;
   onUseAnswer(cardId: string, text: string): void;
@@ -33,6 +50,11 @@ export interface AssistantUi {
   isPanelOpen(): boolean;
   setStatus(message: string, tone?: "info" | "error"): void;
   renderQuestions(cards: readonly QuestionCard[]): void;
+  /**
+   * Muestra los datos encontrados y espera la decisión. Resuelve con lo autorizado, o `null`
+   * si la persona cancela o cierra el panel. Nada se llena antes de que esto resuelva.
+   */
+  requestConsent(items: readonly ConsentItem[]): Promise<ConsentApproval[] | null>;
   destroy(): void;
 }
 
@@ -107,6 +129,14 @@ export function mountAssistantUi(handlers: AssistantUiHandlers): AssistantUi {
   isolateEvents(fab);
   document.documentElement.append(host);
 
+  /** Decisión de autorización pendiente: se resuelve una sola vez (autorizar, cancelar o cerrar). */
+  let pendingConsent: ((result: ConsentApproval[] | null) => void) | null = null;
+  const settleConsent = (result: ConsentApproval[] | null): void => {
+    const resolve = pendingConsent;
+    pendingConsent = null;
+    resolve?.(result);
+  };
+
   const api: AssistantUi = {
     openPanel() {
       panel.hidden = false;
@@ -116,6 +146,7 @@ export function mountAssistantUi(handlers: AssistantUiHandlers): AssistantUi {
       panel.hidden = true;
       list.replaceChildren();
       status.textContent = "";
+      settleConsent(null);
       handlers.onClosed();
     },
     isPanelOpen: () => !panel.hidden,
@@ -123,7 +154,15 @@ export function mountAssistantUi(handlers: AssistantUiHandlers): AssistantUi {
       status.textContent = message;
       status.dataset["tone"] = tone;
     },
+    requestConsent(items) {
+      settleConsent(null);
+      list.replaceChildren(renderConsent(items, settleConsent));
+      return new Promise(resolve => {
+        pendingConsent = resolve;
+      });
+    },
     renderQuestions(cards) {
+      settleConsent(null);
       list.replaceChildren();
       if (!cards.length) {
         list.append(element("p", "empty", "No encontramos preguntas abiertas vacías. Puedes cerrar este panel."));
@@ -132,12 +171,86 @@ export function mountAssistantUi(handlers: AssistantUiHandlers): AssistantUi {
       for (const card of cards) list.append(renderCard(card, handlers, api));
     },
     destroy() {
+      settleConsent(null);
       host.remove();
     }
   };
 
   closeButton.addEventListener("click", () => api.closePanel());
   return api;
+}
+
+/**
+ * Lista de autorización: «Encontramos esta información para estos campos». Cada dato tiene su
+ * casilla (marcada por defecto) y, si es texto libre, se puede corregir antes de autorizar.
+ */
+function renderConsent(items: readonly ConsentItem[], settle: (result: ConsentApproval[] | null) => void): HTMLElement {
+  const section = element("section", "consent");
+  section.append(
+    element("p", "consent-title", "Encontramos esta información para estos campos"),
+    element("p", "consent-hint", "Quita o corrige lo que no quieras antes de autorizar.")
+  );
+
+  const rows: { item: ConsentItem; check: HTMLInputElement; input: HTMLInputElement | null }[] = [];
+  const table = element("div", "consent-list");
+  for (const item of items) {
+    const row = element("label", "consent-row");
+    const check = element("input");
+    check.type = "checkbox";
+    check.checked = true;
+    check.className = "consent-check";
+    check.setAttribute("aria-label", `Llenar ${item.label}`);
+
+    const body = element("span", "consent-body");
+    body.append(element("span", "consent-label", item.label));
+    let input: HTMLInputElement | null = null;
+    if (item.editable) {
+      input = element("input", "consent-value");
+      input.type = "text";
+      input.value = item.value;
+      input.setAttribute("aria-label", `Valor para ${item.label}`);
+      body.append(input);
+    } else {
+      body.append(element("span", "consent-fixed", item.value));
+    }
+    row.append(check, body);
+    table.append(row);
+    rows.push({ item, check, input });
+  }
+
+  const authorize = element("button", "use authorize");
+  authorize.type = "button";
+  const cancel = element("button", "save cancel", "Cancelar");
+  cancel.type = "button";
+  const toggle = element("button", "link toggle-all");
+  toggle.type = "button";
+
+  const refresh = (): void => {
+    const count = rows.filter(row => row.check.checked).length;
+    authorize.textContent = count ? `Autorizar y llenar (${count})` : "Autorizar y llenar";
+    authorize.disabled = count === 0;
+    toggle.textContent = count === rows.length ? "Quitar todos" : "Marcar todos";
+  };
+  for (const row of rows) row.check.addEventListener("change", refresh);
+  toggle.addEventListener("click", () => {
+    const all = rows.every(row => row.check.checked);
+    for (const row of rows) row.check.checked = !all;
+    refresh();
+  });
+  authorize.addEventListener("click", () => {
+    const approved = rows
+      .filter(row => row.check.checked)
+      .map(row => ({ id: row.item.id, value: row.input ? row.input.value.trim() : row.item.value }))
+      .filter(entry => entry.value !== "");
+    if (approved.length) settle(approved);
+  });
+  cancel.addEventListener("click", () => settle(null));
+  refresh();
+
+  const actions = element("div", "actions");
+  actions.append(authorize, cancel);
+  section.append(toggle, table, actions);
+  return section;
 }
 
 function renderCard(card: QuestionCard, handlers: AssistantUiHandlers, ui: AssistantUi): HTMLElement {

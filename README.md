@@ -9,6 +9,7 @@ URL de creación de cuenta: https://isaparras23-hirely-web-hirely-09.hirelyeafit
 
 - Inicio/cierre de sesión con Supabase Auth.
 - Lee tu perfil (`public.profiles`) y rellena campos de formularios por etiqueta, `aria-label`, `aria-labelledby`, placeholder, `name` y `autocomplete` (ES/EN).
+- **Pide autorización antes de llenar**: muestra «Encontramos esta información para estos campos» con cada dato, y solo llena lo que la persona deja marcado (ver «Autorización»).
 - Detecta preguntas abiertas y sugiere respuestas guardadas (similitud léxica local, sin IA).
 - Panel sobre la página (aislado con Shadow DOM) para revisar, insertar o guardar respuestas. **Nunca envía el formulario.**
 - Gestión de respuestas guardadas desde el popup.
@@ -31,7 +32,7 @@ src/
     assistant-ui.ts/.css  botón y panel en Shadow DOM
   popup/popup.ts
 scripts/                build-env.mjs · sync-web-app.mjs · test.mjs
-tests/                  50 tests (node:test + jsdom)
+tests/                  86 tests (node:test + jsdom)
 sql/                    saved_answers.sql · verify_rls.sql
 web-app/                Web independiente (ver web-app/README.md)
 dist/                   ← GENERADO: es la extensión lista para cargar en Chrome
@@ -63,7 +64,7 @@ Requiere Node.js 20+.
 
 ```bash
 npm install
-npm run check      # typecheck (3 configuraciones) + 50 tests
+npm run check      # typecheck (3 configuraciones) + 86 tests
 npm run build      # producción → dist/
 ```
 
@@ -112,6 +113,20 @@ En Chrome: `chrome://extensions` → **Modo de desarrollador** → **Cargar desc
 |---|---|---|---|
 | `content.js` (se inyecta en cada página) | 805 KB | 161 KB | **42 KB** |
 | `popup.js` | 795 KB | 140 KB | **30 KB** |
+
+## Autorización
+
+Nada se escribe en la página sin permiso. Al pulsar «H» (o «Autocompletar» en el popup):
+
+1. **Planear (solo lectura).** `planComplementaryModal` (modal de Magneto) y `matchFieldsToValues` (resto de la página) calculan qué se llenaría. No abren listas, no escriben, no hacen clic.
+2. **Preguntar.** El panel muestra «Encontramos esta información para estos campos»: una fila por dato con su casilla (marcada por defecto), el valor editable si es texto libre, «Marcar todos / Quitar todos», **Autorizar y llenar (n)** y **Cancelar**. En un `<select>` se muestra el texto de la opción («Colombia»), no su `value` («CO»), y no se edita.
+3. **Llenar solo lo autorizado**, con el valor que la persona dejó. Lo desmarcado no se toca.
+
+La fecha de nacimiento de Magneto (8 casillas de un dígito) aparece como una sola fila, «Fecha de nacimiento: DD/MM/AAAA», y también se puede quitar o corregir.
+
+Cancelar o cerrar el panel equivale a no autorizar: no se llena nada y las preguntas abiertas se siguen sugiriendo (esas ya requieren pulsar «Usar respuesta»).
+
+Para cualquier llenado nuevo (por ejemplo, el formulario de crear cuenta en Magneto), usa la misma puerta: arma una lista de `ConsentItem` y llama a `ui.requestConsent(items)` **antes** de escribir. Resuelve con los `ConsentApproval` (id + valor final) o con `null`.
 
 ## Magneto: datos complementarios
 

@@ -17,10 +17,25 @@ import { attachSuggestionsCooperative } from "../shared/question-matching";
 import { getFreshSession } from "../shared/session";
 import { assertExtensionAlive } from "../shared/storage";
 import { describeError, log } from "../shared/logger";
-import type { JsonRecord, QuestionSuggestion, SavedAnswer } from "../shared/types";
-import { applyFieldMatches, fillElement, fillMagnetoBirthDate, scanFormFields, type FillableElement } from "./dom-fields";
-import { fillComplementaryModal, isInside, summarizeComplementary } from "./complementary-form";
-import { mountAssistantUi, type AssistantUi, type QuestionCard } from "./assistant-ui";
+import type { FieldDescriptor, FieldMatch, JsonRecord, QuestionSuggestion, SavedAnswer } from "../shared/types";
+import {
+  applyFieldMatches,
+  fillElement,
+  fillMagnetoBirthDate,
+  findMagnetoBirthDateGroup,
+  formatBirthDate,
+  scanFormFields,
+  type FillableElement
+} from "./dom-fields";
+import {
+  authorizedComplementaryValues,
+  fillComplementaryModal,
+  isInside,
+  planComplementaryModal,
+  summarizeComplementary,
+  type ComplementaryPlanItem
+} from "./complementary-form";
+import { mountAssistantUi, type AssistantUi, type ConsentItem, type QuestionCard } from "./assistant-ui";
 import { yieldToMain } from "./scheduling";
 
 /** Estado de la ejecución en curso; se descarga al cerrar el panel (no retiene DOM ni respuestas). */
@@ -80,25 +95,62 @@ async function runAssistant(): Promise<void> {
       return;
     }
 
-    // Primero el modal de datos complementarios (controles que requieren clics); el resto de la página después.
-    const complementary = await fillComplementaryModal(data.complementary);
-    if (!panel.isPanelOpen()) return;
-    const modal = complementary.modal;
-    const scan = await scanFormFields(document, { exclude: el => modal !== null && isInside(modal, el) });
+    // 1. Calcular qué se llenaría, SIN tocar la página: el modal de datos complementarios y el resto.
+    const plan = planComplementaryModal(data.complementary);
+    const modal = plan.modal;
+    // Fecha de nacimiento de Magneto: 8 casillas de un dígito. Se maneja aparte y se excluye del escaneo genérico.
+    const birthDate = data.values.birth_date ? formatBirthDate(data.values.birth_date) : null;
+    const birthGroup = birthDate ? findMagnetoBirthDateGroup() : null;
+    const scan = await scanFormFields(document, {
+      exclude: el => (modal !== null && isInside(modal, el)) || (birthGroup?.includes(el as HTMLInputElement) ?? false)
+    });
     const matches = matchFieldsToValues(data.values, scan.fields);
-    const report = applyFieldMatches(matches, scan.elements);
-    const birthDateFilled = data.values.birth_date ? fillMagnetoBirthDate(data.values.birth_date) : false;
+    if (!panel.isPanelOpen()) return;
+
+    // 2. Pedir autorización. Nada se escribe en la página hasta que la persona acepta.
+    const consent = buildConsent(plan.items, matches, scan.fields);
+    if (birthDate && birthGroup) consent.items.push({ id: BIRTH_DATE_ID, label: "Fecha de nacimiento", value: birthDate, editable: true });
+    let filledIds: ReadonlySet<string> = new Set();
+    let headline: string;
+    if (!consent.items.length) {
+      headline = `No encontramos campos que podamos llenar con tu perfil.${plan.modal ? summarizeComplementary({ modal: plan.modal, steps: [] }) : ""}`;
+    } else {
+      panel.setStatus(""); // el título de la lista ya explica qué hacer
+      const approvals = await panel.requestConsent(consent.items);
+      if (!panel.isPanelOpen()) return;
+      if (!approvals) {
+        headline = "No se llenó ningún campo.";
+      } else {
+        // 3. Llenar SOLO lo autorizado, con los valores que la persona dejó.
+        const approved = new Map(approvals.map(item => [item.id, item.value]));
+        const complementaryItems = consent.complementary
+          .filter(entry => approved.has(entry.id))
+          .map(entry => ({ ...entry.item, value: approved.get(entry.id) ?? entry.item.value }));
+        const complementary = complementaryItems.length
+          ? await fillComplementaryModal(authorizedComplementaryValues(complementaryItems))
+          : { modal: null, steps: [] };
+        if (!panel.isPanelOpen()) return;
+        const fieldMatches = matches
+          .filter(match => approved.has(match.fieldId))
+          .map(match => (consent.editable.has(match.fieldId) ? { ...match, value: approved.get(match.fieldId) ?? match.value } : match));
+        const report = applyFieldMatches(fieldMatches, scan.elements);
+        filledIds = report.filled;
+        const approvedBirthDate = approved.get(BIRTH_DATE_ID);
+        const birthDateFilled = approvedBirthDate !== undefined && fillMagnetoBirthDate(approvedBirthDate, birthGroup);
+        const birthDateNote = approvedBirthDate !== undefined && !birthDateFilled ? " Revisar: fecha de nacimiento (usa DD/MM/AAAA)." : "";
+        headline = `Autocompletado: ${report.filled.size + (birthDateFilled ? 1 : 0)} campo(s).${summarizeComplementary(complementary)}${birthDateNote}`;
+      }
+    }
 
     // Un campo recién autocompletado ya no es una "pregunta abierta vacía".
-    const remaining = scan.fields.filter(field => !report.filled.has(field.id));
+    const remaining = scan.fields.filter(field => !filledIds.has(field.id));
     const questions = detectOpenQuestions(remaining);
     const suggestions = await attachSuggestionsCooperative(questions, data.answers, { yieldFn: yieldToMain });
     if (!panel.isPanelOpen()) return;
 
     run = { elements: scan.elements, questions: new Map(suggestions.map(item => [item.fieldId, item])) };
-    const totalFilled = report.filled.size + (birthDateFilled ? 1 : 0);
-    log.info("assistant.done", { fields: scan.fields.length, filled: totalFilled, birthDateFilled, questions: questions.length, truncated: scan.truncated });
-    panel.setStatus(`Autocompletado: ${totalFilled} campo(s).${summarizeComplementary(complementary)} Preguntas abiertas detectadas: ${questions.length}.`);
+    log.info("assistant.done", { fields: scan.fields.length, offered: consent.items.length, filled: filledIds.size, questions: questions.length, truncated: scan.truncated });
+    panel.setStatus(`${headline} Preguntas abiertas detectadas: ${questions.length}.`);
     panel.renderQuestions(suggestions.map(toCard));
   } catch (error) {
     log.warn("assistant.failed", describeError(error));
@@ -106,6 +158,50 @@ async function runAssistant(): Promise<void> {
   } finally {
     running = false;
   }
+}
+
+/** Id de la fila de la fecha de nacimiento de Magneto en la lista de autorización. */
+const BIRTH_DATE_ID = "birth-date";
+
+interface ConsentPlan {
+  readonly items: ConsentItem[];
+  /** Datos del modal de Magneto, con el id que llevan en la lista de autorización. */
+  readonly complementary: { readonly id: string; readonly item: ComplementaryPlanItem }[];
+  /** ids de campos cuyo valor se puede corregir (texto libre; un <select> no). */
+  readonly editable: ReadonlySet<string>;
+}
+
+/** Une lo que se llenaría en el modal y en el resto de la página en una sola lista para autorizar. */
+function buildConsent(
+  complementaryItems: readonly ComplementaryPlanItem[],
+  matches: readonly FieldMatch[],
+  fields: readonly FieldDescriptor[]
+): ConsentPlan {
+  const items: ConsentItem[] = [];
+  const complementary: ConsentPlan["complementary"][number][] = [];
+  const editable = new Set<string>();
+
+  complementaryItems.forEach((item, index) => {
+    const id = `cx-${index + 1}`;
+    complementary.push({ id, item });
+    items.push({
+      id,
+      label: item.key === "preference" ? "Preferencia" : item.target,
+      value: item.value,
+      editable: item.key !== "preference"
+    });
+  });
+
+  const byId = new Map(fields.map(field => [field.id, field]));
+  for (const match of matches) {
+    const field = byId.get(match.fieldId);
+    const isSelect = field?.kind === "select";
+    // En un <select> se muestra el texto de la opción, no su value interno («Colombia», no «CO»).
+    const shown = isSelect ? field.options.find(option => option.value === match.value)?.label ?? match.value : match.value;
+    if (!isSelect) editable.add(match.fieldId);
+    items.push({ id: match.fieldId, label: match.label || "Campo", value: shown, editable: !isSelect });
+  }
+  return { items, complementary, editable };
 }
 
 function toCard(item: QuestionSuggestion): QuestionCard {
