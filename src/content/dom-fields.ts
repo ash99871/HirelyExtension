@@ -296,6 +296,89 @@ export function applyFieldMatches(matches: readonly FieldMatch[], elements: Read
   return { filled, skipped };
 }
 
+/**
+ * Adaptador para la fecha de nacimiento de Magneto: ese formulario representa
+ * DD/MM/AAAA mediante ocho inputs independientes de un solo carácter. No se
+ * agregan al escaneo genérico porque cada input, por separado, no es una fecha.
+ */
+export function fillMagnetoBirthDate(rawValue: string): boolean {
+  const digits = normalizeBirthDateDigits(rawValue);
+  if (!digits) return false;
+
+  const roots: ParentNode[] = [document];
+  const visited = new Set<ParentNode>(roots);
+  for (let index = 0; index < roots.length; index++) {
+    const current = roots[index]!;
+    for (const host of current.querySelectorAll<Element>("*")) {
+      const shadow = host.shadowRoot;
+      if (shadow && !visited.has(shadow)) {
+        visited.add(shadow);
+        roots.push(shadow);
+      }
+    }
+  }
+
+  for (const root of roots) {
+    const candidates = Array.from(root.querySelectorAll<HTMLInputElement>(
+      'input[maxlength="1"][inputmode="numeric"]'
+    )).filter(input => isUsable(input));
+
+    for (const first of candidates) {
+      // Buscar el contenedor más cercano que identifique inequívocamente el grupo.
+      let container: Element | null = first.parentElement;
+      for (let depth = 0; container && depth < 6; depth++, container = container.parentElement) {
+        const text = normalizeDateLabel(container.textContent ?? "");
+        if (!text.includes("fecha de nacimiento")) continue;
+
+        const group = Array.from(container.querySelectorAll<HTMLInputElement>(
+          'input[maxlength="1"][inputmode="numeric"]'
+        ));
+        if (group.length !== 8 || group.some(input => !isUsable(input))) continue;
+        if (group.some(input => input.value.trim() !== "")) return false;
+
+        for (let i = 0; i < group.length; i++) {
+          const input = group[i]!;
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+          if (setter) setter.call(input, digits[i]);
+          else input.value = digits[i]!;
+          input.dispatchEvent(new InputEvent("input", {
+            bubbles: true, composed: true, inputType: "insertText", data: digits[i]!
+          }));
+          input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        }
+        group[group.length - 1]!.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
+        group[group.length - 1]!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function normalizeDateLabel(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Convierte YYYY-MM-DD o DD/MM/YYYY a los ocho dígitos DDMMYYYY. */
+function normalizeBirthDateDigits(rawValue: string): string | null {
+  const value = rawValue.trim();
+  let day = "", month = "", year = "";
+  let match = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:T.*)?$/);
+  if (match) {
+    year = match[1]!; month = match[2]!; day = match[3]!;
+  } else {
+    match = value.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
+    if (match) { day = match[1]!; month = match[2]!; year = match[3]!; }
+    else if (/^\d{8}$/.test(value)) {
+      day = value.slice(0, 2); month = value.slice(2, 4); year = value.slice(4);
+    } else return null;
+  }
+  const d = Number(day), m = Number(month), y = Number(year);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  if (y < 1900 || y > 2100 || date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return null;
+  return `${String(d).padStart(2, "0")}${String(m).padStart(2, "0")}${year}`;
+}
+
 export const MAGNETO_SELECTORS = [
   'input[name*="question"]',
   'textarea[name*="question"]',

@@ -18,7 +18,7 @@ import { getFreshSession } from "../shared/session";
 import { assertExtensionAlive } from "../shared/storage";
 import { describeError, log } from "../shared/logger";
 import type { JsonRecord, QuestionSuggestion, SavedAnswer } from "../shared/types";
-import { applyFieldMatches, fillElement, scanFormFields, type FillableElement } from "./dom-fields";
+import { applyFieldMatches, fillElement, fillMagnetoBirthDate, scanFormFields, type FillableElement } from "./dom-fields";
 import { fillComplementaryModal, isInside, summarizeComplementary } from "./complementary-form";
 import { mountAssistantUi, type AssistantUi, type QuestionCard } from "./assistant-ui";
 import { yieldToMain } from "./scheduling";
@@ -87,6 +87,7 @@ async function runAssistant(): Promise<void> {
     const scan = await scanFormFields(document, { exclude: el => modal !== null && isInside(modal, el) });
     const matches = matchFieldsToValues(data.values, scan.fields);
     const report = applyFieldMatches(matches, scan.elements);
+    const birthDateFilled = data.values.birth_date ? fillMagnetoBirthDate(data.values.birth_date) : false;
 
     // Un campo recién autocompletado ya no es una "pregunta abierta vacía".
     const remaining = scan.fields.filter(field => !report.filled.has(field.id));
@@ -95,8 +96,9 @@ async function runAssistant(): Promise<void> {
     if (!panel.isPanelOpen()) return;
 
     run = { elements: scan.elements, questions: new Map(suggestions.map(item => [item.fieldId, item])) };
-    log.info("assistant.done", { fields: scan.fields.length, filled: report.filled.size, questions: questions.length, truncated: scan.truncated });
-    panel.setStatus(`Autocompletado: ${report.filled.size} campo(s).${summarizeComplementary(complementary)} Preguntas abiertas detectadas: ${questions.length}.`);
+    const totalFilled = report.filled.size + (birthDateFilled ? 1 : 0);
+    log.info("assistant.done", { fields: scan.fields.length, filled: totalFilled, birthDateFilled, questions: questions.length, truncated: scan.truncated });
+    panel.setStatus(`Autocompletado: ${totalFilled} campo(s).${summarizeComplementary(complementary)} Preguntas abiertas detectadas: ${questions.length}.`);
     panel.renderQuestions(suggestions.map(toCard));
   } catch (error) {
     log.warn("assistant.failed", describeError(error));

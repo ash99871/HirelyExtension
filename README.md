@@ -1,6 +1,9 @@
 # Hirely Browser Extension — TypeScript v2.1
 
-Extensión de Chrome (Manifest V3) para Hirely. Usa el mismo proyecto Supabase que la aplicación Lovable. No modifica la aplicación web existente y no utiliza `profile_versions`.
+Extensión de Chrome/Edge/Safari (Manifest V3) para Hirely. Usa el mismo proyecto Supabase que la aplicación Lovable. No modifica la aplicación web existente y no utiliza `profile_versions`.
+
+URL de creación de cuenta: https://isaparras23-hirely-web-hirely-09.hirelyeafit.workers.dev/
+
 
 ## Qué hace
 
