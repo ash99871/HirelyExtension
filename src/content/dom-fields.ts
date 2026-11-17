@@ -316,26 +316,20 @@ export function findMagnetoBirthDateGroup(): HTMLInputElement[] | null {
     }
   }
 
+  // Magneto pinta D D / M M / A A A A como placeholders de ocho inputs consecutivos. Se busca esa
+  // secuencia exacta: el rótulo «Fecha de nacimiento» suele estar FUERA del contenedor de los inputs
+  // (hermano del bloque), así que depender de ese texto hacía que el grupo nunca se encontrara.
+  const PATTERN = "DDMMAAAA";
   for (const root of roots) {
-    const candidates = Array.from(root.querySelectorAll<HTMLInputElement>(
-      'input[maxlength="1"][inputmode="numeric"]'
-    )).filter(input => isUsable(input));
-
-    for (const first of candidates) {
-      // Buscar el contenedor más cercano que identifique inequívocamente el grupo.
-      let container: Element | null = first.parentElement;
-      for (let depth = 0; container && depth < 6; depth++, container = container.parentElement) {
-        const text = normalizeDateLabel(container.textContent ?? "");
-        if (!text.includes("fecha de nacimiento")) continue;
-
-        const group = Array.from(container.querySelectorAll<HTMLInputElement>(
-          'input[maxlength="1"][inputmode="numeric"]'
-        ));
-        if (group.length !== 8 || group.some(input => !isUsable(input))) continue;
-        // Si la persona ya escribió algo, no se ofrece ni se toca.
-        if (group.some(input => input.value.trim() !== "")) return null;
-        return group;
-      }
+    const candidates = Array.from(root.querySelectorAll<HTMLInputElement>('input[maxlength="1"][inputmode="numeric"]'))
+      .filter(input => isUsable(input));
+    for (let i = 0; i + 8 <= candidates.length; i++) {
+      const group = candidates.slice(i, i + 8);
+      const pattern = group.map(input => (input.getAttribute("placeholder") ?? "").trim().toUpperCase()).join("");
+      if (pattern !== PATTERN && pattern !== "DDMMYYYY") continue;
+      // Si la persona ya escribió algo, no se ofrece ni se toca.
+      if (group.some(input => input.value.trim() !== "")) return null;
+      return group;
     }
   }
   return null;
@@ -354,14 +348,17 @@ export function fillMagnetoBirthDate(rawValue: string, group: HTMLInputElement[]
   // Se vuelve a comprobar: la página pudo cambiar entre la autorización y el llenado.
   if (group.some(input => !input.isConnected || !isUsable(input) || input.value.trim() !== "")) return false;
 
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
   for (let i = 0; i < group.length; i++) {
     const input = group[i]!;
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    if (setter) setter.call(input, digits[i]);
-    else input.value = digits[i]!;
-    input.dispatchEvent(new InputEvent("input", {
-      bubbles: true, composed: true, inputType: "insertText", data: digits[i]!
-    }));
+    const digit = digits[i]!;
+    input.focus();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: digit, code: `Digit${digit}`, bubbles: true, composed: true, cancelable: true }));
+    input.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, composed: true, cancelable: true, inputType: "insertText", data: digit }));
+    if (setter) setter.call(input, digit);
+    else input.value = digit;
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: digit }));
+    input.dispatchEvent(new KeyboardEvent("keyup", { key: digit, code: `Digit${digit}`, bubbles: true, composed: true }));
     input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
   }
   group[group.length - 1]!.dispatchEvent(new FocusEvent("blur", { bubbles: true }));

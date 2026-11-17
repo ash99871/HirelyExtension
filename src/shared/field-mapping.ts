@@ -18,6 +18,7 @@ const FIELD_DEFINITIONS = {
   email: { keys: ["email", "correo", "email_address"], aliases: ["email", "e-mail", "correo", "correo electronico", "email address"] },
   phone: { keys: ["phone", "phone_number", "mobile", "telefono", "celular"], aliases: ["phone", "phone number", "mobile", "mobile number", "telephone", "teléfono", "telefono", "celular", "whatsapp"] },
   identification_number: { keys: ["identification_number", "identificationNumber", "document_number", "document", "numero_documento", "numero_de_documento", "identification", "cedula", "cédula"], aliases: ["identification number", "identificationnumber", "document number", "numero de documento", "número de documento", "numero documento", "cédula number", "cedula number"] },
+  document_type: { keys: ["document_type", "identification_type", "id_type", "tipo_documento", "tipo_de_documento"], aliases: [] },
   current_city: { keys: ["current_city", "city", "ciudad"], aliases: ["city", "current city", "ciudad", "ciudad actual", "location city"] },
   current_country: { keys: ["current_country", "country", "pais"], aliases: ["country", "current country", "país", "pais", "country of residence"] },
   address: { keys: ["address", "direccion"], aliases: ["address", "street address", "dirección", "direccion", "home address"] },

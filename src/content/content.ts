@@ -37,6 +37,7 @@ import {
 } from "./complementary-form";
 import { mountAssistantUi, type AssistantUi, type ConsentItem, type QuestionCard } from "./assistant-ui";
 import { yieldToMain } from "./scheduling";
+import { fillMagnetoSelect, planMagnetoSelects, type MagnetoSelectItem } from "./magneto-selects";
 
 /** Estado de la ejecución en curso; se descarga al cerrar el panel (no retiene DOM ni respuestas). */
 interface RunState {
@@ -101,8 +102,13 @@ async function runAssistant(): Promise<void> {
     // Fecha de nacimiento de Magneto: 8 casillas de un dígito. Se maneja aparte y se excluye del escaneo genérico.
     const birthDate = data.values.birth_date ? formatBirthDate(data.values.birth_date) : null;
     const birthGroup = birthDate ? findMagnetoBirthDateGroup() : null;
+    // Desplegables select2 (ciudad de nacimiento, tipo de documento): se eligen con clic, no escribiendo.
+    const magnetoSelects = planMagnetoSelects(data.values);
+    const selectIds = new Map(magnetoSelects.map((item, index) => [`ms-${index + 1}`, item] as const));
     const scan = await scanFormFields(document, {
-      exclude: el => (modal !== null && isInside(modal, el)) || (birthGroup?.includes(el as HTMLInputElement) ?? false)
+      exclude: el => (modal !== null && isInside(modal, el)) ||
+        (birthGroup?.includes(el as HTMLInputElement) ?? false) ||
+        magnetoSelects.some(item => item.control === el || item.control.contains(el) || item.control.parentElement?.contains(el))
     });
     const matches = matchFieldsToValues(data.values, scan.fields);
     if (!panel.isPanelOpen()) return;
@@ -110,6 +116,7 @@ async function runAssistant(): Promise<void> {
     // 2. Pedir autorización. Nada se escribe en la página hasta que la persona acepta.
     const consent = buildConsent(plan.items, matches, scan.fields);
     if (birthDate && birthGroup) consent.items.push({ id: BIRTH_DATE_ID, label: "Fecha de nacimiento", value: birthDate, editable: true });
+    for (const [id, item] of selectIds) consent.items.push({ id, label: item.label, value: item.value, editable: true });
     let filledIds: ReadonlySet<string> = new Set();
     let headline: string;
     if (!consent.items.length) {
@@ -138,7 +145,19 @@ async function runAssistant(): Promise<void> {
         const approvedBirthDate = approved.get(BIRTH_DATE_ID);
         const birthDateFilled = approvedBirthDate !== undefined && fillMagnetoBirthDate(approvedBirthDate, birthGroup);
         const birthDateNote = approvedBirthDate !== undefined && !birthDateFilled ? " Revisar: fecha de nacimiento (usa DD/MM/AAAA)." : "";
-        headline = `Autocompletado: ${report.filled.size + (birthDateFilled ? 1 : 0)} campo(s).${summarizeComplementary(complementary)}${birthDateNote}`;
+        // Desplegables de Magneto: uno tras otro (cada lista debe abrirse y cerrarse antes de la siguiente).
+        const selectResults: string[] = [];
+        let selectsDone = 0;
+        for (const [id, item] of selectIds) {
+          const wanted = approved.get(id);
+          if (wanted === undefined) continue;
+          const result = await fillMagnetoSelect(item as MagnetoSelectItem, wanted);
+          if (result.ok) selectsDone++;
+          else selectResults.push(`${result.label} (${result.detail})`);
+          if (!panel.isPanelOpen()) return;
+        }
+        const selectNote = selectResults.length ? ` Revisar: ${selectResults.join(", ")}.` : "";
+        headline = `Autocompletado: ${report.filled.size + (birthDateFilled ? 1 : 0) + selectsDone} campo(s).${summarizeComplementary(complementary)}${birthDateNote}${selectNote}`;
       }
     }
 

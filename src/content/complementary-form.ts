@@ -70,12 +70,12 @@ const CLICKABLE = [
 // Magneto usa CSS modules: «…card--selected___SkzRf». Se reconoce la palabra aunque vaya unida con guiones o guiones bajos.
 const SELECTED_CLASS = /(^|[\s_-])(selected|checked|active)([\s_-]|$)/i;
 /** Desplegable personalizado de Magneto (select2): el botón visible que lo abre. */
-const TRIGGER_SELECTOR = 'button[class*="select2-input_button"]';
+export const TRIGGER_SELECTOR = 'button[class*="select2-input_button"]';
 const SELECTED_ATTRIBUTE = '[aria-pressed="true"], [aria-checked="true"], [aria-selected="true"]';
 // «selected-approx» NO es OK: la opción se eligió por parecido y la persona debe confirmarla.
 const OK_STATUSES: ReadonlySet<StepStatus> = new Set(["filled", "selected", "already-selected", "already-filled"]);
 
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+export const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 const textOf = (el: Element): string => normalizeText(el.textContent ?? "");
 
 /* ------------------------------ recorrido del DOM ------------------------------ */
@@ -93,12 +93,12 @@ function collectRoots(start: ParentNode): ParentNode[] {
   return roots;
 }
 
-function deepAll<T extends Element>(start: ParentNode, selector: string): T[] {
+export function deepAll<T extends Element>(start: ParentNode, selector: string): T[] {
   return collectRoots(start).flatMap(root => [...root.querySelectorAll<T>(selector)]);
 }
 
 /** Padre en el árbol, cruzando el límite de un Shadow DOM hacia su host. */
-function parentOf(el: Element): Element | null {
+export function parentOf(el: Element): Element | null {
   if (el.parentElement) return el.parentElement;
   const host = (el.getRootNode() as ShadowRoot).host as Element | undefined;
   return host ?? null;
@@ -155,7 +155,7 @@ function ownBlockText(control: HTMLElement): string {
 }
 
 /** <input> oculto del mismo desplegable: lleva el nombre real del campo y su etiqueta. */
-function companionInput(trigger: Element): HTMLInputElement | null {
+export function companionInput(trigger: Element): HTMLInputElement | null {
   let node: Element | null = trigger.parentElement;
   for (let depth = 0; node && depth < 2; depth++, node = node.parentElement) {
     const input = node.querySelector("input");
@@ -204,7 +204,7 @@ function locateControls(modal: Element): Map<ComplementaryKey, HTMLElement> {
 /* ------------------------------ acciones ------------------------------ */
 
 /** Dispara la secuencia completa de eventos que espera un framework; bloquea el envío de formularios. */
-function clickEl(el: Element): void {
+export function clickEl(el: Element): void {
   (el as HTMLElement).scrollIntoView?.({ block: "center" });
   // Un botón dentro de un <form> enviaría el formulario al pulsarlo: se cancela ese envío.
   const root = el.getRootNode() as unknown as EventTarget;
@@ -220,7 +220,7 @@ function clickEl(el: Element): void {
 }
 
 /** Escribe como lo haría el usuario: con el setter nativo y un evento input (sin blur, para no cerrar la lista). */
-function typeText(input: HTMLInputElement, text: string): void {
+export function typeText(input: HTMLInputElement, text: string): void {
   Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "value")?.set?.call(input, text);
   input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
 }
@@ -285,7 +285,7 @@ function findApproxOption(wanted: string, search: OptionSearch): HTMLElement | n
 }
 
 /** Valor visible del control: el value de un <input>, o el texto de un botón de desplegable. */
-function currentText(control: HTMLElement): string {
+export function currentText(control: HTMLElement): string {
   if (control.tagName === "INPUT" || control.tagName === "TEXTAREA") return (control as HTMLInputElement).value ?? "";
   return textOf(control);
 }
@@ -348,7 +348,7 @@ async function pickSearchableTrigger(trigger: HTMLElement, wanted: string, modal
 }
 
 /** Campo de texto visible que abrió el desplegable: primero dentro de él, luego uno nuevo en la página. */
-function findSearchInput(trigger: Element, before: ReadonlySet<Element>): HTMLInputElement | null {
+export function findSearchInput(trigger: Element, before: ReadonlySet<Element>): HTMLInputElement | null {
   const container = trigger.parentElement;
   const visible = deepAll<HTMLInputElement>(document, "input").filter(input =>
     isRendered(input) && !input.disabled && !input.readOnly && ["", "text", "search"].includes(input.type));
