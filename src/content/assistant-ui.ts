@@ -38,7 +38,8 @@ export interface ConsentApproval {
 
 export interface AssistantUiHandlers {
   onLaunch(): void;
-  onUseAnswer(cardId: string, text: string): void;
+  /** Devuelve `true` si la respuesta quedó escrita en la página (entonces su tarjeta se quita). */
+  onUseAnswer(cardId: string, text: string): boolean;
   /** Devuelve `true` si se guardó correctamente. */
   onSaveAnswer(cardId: string, text: string): Promise<boolean>;
   onClosed(): void;
@@ -156,6 +157,7 @@ export function mountAssistantUi(handlers: AssistantUiHandlers): AssistantUi {
     },
     requestConsent(items) {
       settleConsent(null);
+      delete panel.dataset["view"];
       list.replaceChildren(renderConsent(items, settleConsent));
       return new Promise(resolve => {
         pendingConsent = resolve;
@@ -163,12 +165,14 @@ export function mountAssistantUi(handlers: AssistantUiHandlers): AssistantUi {
     },
     renderQuestions(cards) {
       settleConsent(null);
+      delete panel.dataset["view"];
       list.replaceChildren();
-      if (!cards.length) {
-        list.append(element("p", "empty", "No encontramos preguntas abiertas vacías. Puedes cerrar este panel."));
-        return;
-      }
-      for (const card of cards) list.append(renderCard(card, handlers, api));
+      if (!cards.length) return showDone();
+      // Al usar una respuesta, su tarjeta se va; cuando no queda ninguna, pantalla final.
+      const answered = (): void => {
+        if (!list.querySelector(".card")) showDone();
+      };
+      for (const card of cards) list.append(renderCard(card, handlers, api, answered));
     },
     destroy() {
       settleConsent(null);
@@ -176,8 +180,50 @@ export function mountAssistantUi(handlers: AssistantUiHandlers): AssistantUi {
     }
   };
 
+  /** Pantalla final: ya no quedan preguntas por responder. */
+  function showDone(): void {
+    panel.dataset["view"] = "done";
+    status.textContent = "";
+    list.replaceChildren(renderDone(() => api.closePanel()));
+  }
+
   closeButton.addEventListener("click", () => api.closePanel());
   return api;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function checkIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2.4");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(SVG_NS, "path");
+  path.setAttribute("d", "M5 12.5l4.2 4.2L19 7");
+  svg.append(path);
+  return svg;
+}
+
+function renderDone(onClose: () => void): HTMLElement {
+  const section = element("section", "done");
+  const icon = element("div", "done-icon");
+  icon.append(checkIcon());
+  const close = element("button", "use done-close", "Cerrar");
+  close.type = "button";
+  close.addEventListener("click", onClose);
+  const actions = element("div", "actions");
+  actions.append(close);
+  section.append(
+    icon,
+    element("p", "done-title", "Todo listo"),
+    element("p", "done-text", "No detectamos más preguntas. Revisa el formulario y envíalo cuando quieras."),
+    actions
+  );
+  return section;
 }
 
 /**
@@ -253,7 +299,7 @@ function renderConsent(items: readonly ConsentItem[], settle: (result: ConsentAp
   return section;
 }
 
-function renderCard(card: QuestionCard, handlers: AssistantUiHandlers, ui: AssistantUi): HTMLElement {
+function renderCard(card: QuestionCard, handlers: AssistantUiHandlers, ui: AssistantUi, onAnswered: () => void): HTMLElement {
   const section = element("section", "card");
   const badge = element(
     "div",
@@ -273,7 +319,14 @@ function renderCard(card: QuestionCard, handlers: AssistantUiHandlers, ui: Assis
   use.addEventListener("click", () => {
     const text = textarea.value.trim();
     if (!text) return ui.setStatus("Escribe una respuesta antes de insertarla.", "error");
-    handlers.onUseAnswer(card.id, text);
+    if (!handlers.onUseAnswer(card.id, text)) return;
+    // Respondida: la tarjeta se desvanece y se quita. Si era la última, aparece «Todo listo».
+    use.disabled = true;
+    section.classList.add("leaving");
+    setTimeout(() => {
+      section.remove();
+      onAnswered();
+    }, 200);
   });
 
   const save = element("button", "save", "Guardar para después");

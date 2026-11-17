@@ -191,6 +191,49 @@ test("autorización: cerrar el panel mientras pregunta equivale a no autorizar",
   await waitFor(() => !!h.shadow().querySelector(".authorize"));
 });
 
+test("preguntas: al usar una respuesta su tarjeta se va, y sin preguntas pendientes aparece «Todo listo»", async () => {
+  const { h, doc, status } = await startAndWaitForConsent();
+  h.shadow().querySelector<HTMLButtonElement>(".authorize")!.click();
+  await waitFor(() => h.shadow().querySelectorAll(".card").length === 2);
+
+  // Primera pregunta: respuesta guardada sugerida.
+  h.shadow().querySelector<HTMLButtonElement>(".card .use")!.click();
+  assert.equal((doc.getElementById("why") as HTMLTextAreaElement).value, "Porque admiro su misión.");
+  assert.equal(status(), "Respuesta insertada.");
+  await waitFor(() => h.shadow().querySelectorAll(".card").length === 1);
+  assert.equal(h.shadow().querySelector(".done"), null, "aún queda una pregunta");
+
+  // Una respuesta vacía no se inserta y la tarjeta se queda.
+  h.shadow().querySelector<HTMLButtonElement>(".card .use")!.click();
+  assert.equal(h.shadow().querySelectorAll(".card").length, 1);
+
+  // Segunda pregunta: la persona escribe su respuesta.
+  h.shadow().querySelector<HTMLTextAreaElement>(".card textarea")!.value = "Cinco años vendiendo software.";
+  h.shadow().querySelector<HTMLButtonElement>(".card .use")!.click();
+  assert.equal((doc.getElementById("exp") as HTMLTextAreaElement).value, "Cinco años vendiendo software.");
+  await waitFor(() => !!h.shadow().querySelector(".done"));
+  assert.equal(h.shadow().querySelector(".done-title")!.textContent, "Todo listo");
+  assert.match(h.shadow().querySelector(".done-text")!.textContent!, /No detectamos más preguntas/);
+  assert.equal(h.shadow().querySelectorAll(".card").length, 0);
+
+  // «Cerrar» cierra el panel.
+  h.shadow().querySelector<HTMLButtonElement>(".done-close")!.click();
+  assert.equal(h.shadow().querySelector<HTMLElement>(".panel")!.hidden, true);
+});
+
+test("preguntas: si no hay preguntas abiertas, va directo a «Todo listo» tras autorizar", async () => {
+  const code = await compileContentScript();
+  const h = setup();
+  const doc = h.dom.window.document;
+  for (const id of ["why", "exp"]) doc.getElementById(id)!.remove();
+  (h.dom.window as unknown as { eval(c: string): void }).eval(code);
+  h.listeners[0]!({ type: "HIRELY_AUTOFILL" }, { id: "ext" }, () => undefined);
+  await waitFor(() => !!h.shadow().querySelector(".authorize"));
+  h.shadow().querySelector<HTMLButtonElement>(".authorize")!.click();
+  await waitFor(() => !!h.shadow().querySelector(".done"));
+  assert.equal((doc.getElementById("fn") as HTMLInputElement).value, "Ana");
+});
+
 /** Fecha de nacimiento como la dibuja Magneto: 8 casillas de un dígito (DD MM AAAA). */
 const BIRTH_DATE = `<div class="birth"><p>Fecha de nacimiento</p><div>${
   Array.from({ length: 8 }, (_, i) => `<input class="d" data-i="${i}" maxlength="1" inputmode="numeric">`).join("")

@@ -138,7 +138,7 @@ test("Shadow DOM: raíz cerrada, estilos dentro de la sombra, nada del panel en 
   document.addEventListener("keydown", e => events.push(e.type));
   document.addEventListener("click", e => events.push(e.type));
 
-  const ui = mountAssistantUi({ onLaunch() {}, onUseAnswer() {}, onSaveAnswer: async () => true, onClosed() {} });
+  const ui = mountAssistantUi({ onLaunch() {}, onUseAnswer: () => true, onSaveAnswer: async () => true, onClosed() {} });
   Element.prototype.attachShadow = original;
 
   const host = document.getElementById("hirely-assistant-root")!;
@@ -166,10 +166,10 @@ test("el panel monta de forma idempotente y delega las acciones sin conocer los 
   let shadow: ShadowRoot | undefined;
   const original = Element.prototype.attachShadow;
   Element.prototype.attachShadow = function (init) { shadow = original.call(this, init); return shadow; };
-  mountAssistantUi({ onLaunch() {}, onUseAnswer() {}, onSaveAnswer: async () => true, onClosed() {} });
+  mountAssistantUi({ onLaunch() {}, onUseAnswer: () => true, onSaveAnswer: async () => true, onClosed() {} });
   const ui = mountAssistantUi({
     onLaunch: () => calls.push("launch"),
-    onUseAnswer: (id, text) => calls.push(`use:${id}:${text}`),
+    onUseAnswer: (id, text) => { calls.push(`use:${id}:${text}`); return true; },
     onSaveAnswer: async (id, text) => { calls.push(`save:${id}:${text}`); return true; },
     onClosed: () => calls.push("closed")
   });
@@ -192,7 +192,7 @@ test("el contenido del usuario se inserta como texto, nunca como HTML (sin XSS)"
   let shadow: ShadowRoot | undefined;
   const original = Element.prototype.attachShadow;
   Element.prototype.attachShadow = function (init) { shadow = original.call(this, init); return shadow; };
-  const ui = mountAssistantUi({ onLaunch() {}, onUseAnswer() {}, onSaveAnswer: async () => true, onClosed() {} });
+  const ui = mountAssistantUi({ onLaunch() {}, onUseAnswer: () => true, onSaveAnswer: async () => true, onClosed() {} });
   Element.prototype.attachShadow = original;
   ui.openPanel();
   ui.renderQuestions([{ id: "x", label: `<img src=x onerror=alert(1)>`, initialAnswer: `<script>alert(1)</script>` }]);

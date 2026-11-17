@@ -213,13 +213,21 @@ function toCard(item: QuestionSuggestion): QuestionCard {
   };
 }
 
-function useAnswer(cardId: string, text: string): void {
+/** Inserta la respuesta en la página. Devuelve `true` si quedó escrita (el panel quita entonces su tarjeta). */
+function useAnswer(cardId: string, text: string): boolean {
   const element = run?.elements.get(cardId);
-  if (!element) return void ui?.setStatus("Este campo ya no está disponible en la página.", "error");
+  if (!element) {
+    ui?.setStatus("Este campo ya no está disponible en la página.", "error");
+    return false;
+  }
   // Acción explícita del usuario ("Usar respuesta"): sí se permite sustituir el contenido.
   const outcome = fillElement(element, text, { overwrite: true });
-  if (outcome === "filled") ui?.setStatus("Respuesta insertada. Revisa el formulario antes de enviarlo.");
-  else ui?.setStatus("No se pudo insertar: el campo ya no está disponible o está deshabilitado.", "error");
+  if (outcome === "filled") {
+    ui?.setStatus("Respuesta insertada.");
+    return true;
+  }
+  ui?.setStatus("No se pudo insertar: el campo ya no está disponible o está deshabilitado.", "error");
+  return false;
 }
 
 async function saveForLater(cardId: string, text: string): Promise<boolean> {
