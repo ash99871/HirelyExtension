@@ -1,6 +1,7 @@
 /**
- * Datos complementarios de Magneto: el modal que aparece tras «Información personal»
- * («Completa los siguientes datos para terminar tu aplicación a la vacante»).
+ * Datos complementarios de Magneto. Magneto muestra los mismos campos en dos formularios:
+ *   - al postularse: «Completa los siguientes datos para terminar tu aplicación a la vacante» (botón «Siguiente»);
+ *   - desde el perfil, «Completar preferencias»: «Déjanos conocer tus preferencias de empleo» (botón «Guardar»).
  *
  * LÓGICA PURA: reconoce cada control por el texto que lo rodea y decide qué valor del perfil
  * le corresponde. No toca el DOM (eso vive en src/content/complementary-form.ts).
@@ -11,10 +12,16 @@ import { normalizeText, tokenize } from "./text-similarity";
 import type { JsonRecord } from "./types";
 
 /** Controles de texto que se rellenan escribiendo o eligiendo de una lista. */
-export type ComplementaryKey = "sector" | "job_title" | "education_level" | "salary";
+export type ComplementaryKey = "sector" | "job_title" | "education_level" | "salary" | "city";
 
-/** Frase del título del modal, normalizada. */
-export const MODAL_TITLE_PHRASE = normalizeText("Completa los siguientes datos");
+/** Frases del título de cada versión del formulario, normalizadas. */
+export const MODAL_TITLE_PHRASES: readonly string[] = [
+  "Completa los siguientes datos",
+  "Déjanos conocer tus preferencias de empleo"
+].map(normalizeText);
+
+/** Botón con el que la persona confirma el formulario (la extensión NUNCA lo pulsa). Sirve para encontrar el contenedor. */
+export const MODAL_SUBMIT_WORDS: readonly string[] = ["siguiente", "guardar"];
 
 export interface TextHint {
   /** Texto normalizado con normalizeText. */
@@ -35,7 +42,8 @@ const RULE_SOURCES: readonly { readonly key: ComplementaryKey; readonly recogniz
   { key: "job_title", recognize: ["cargo en el que quieres", "agrega un cargo", "cargo oficio o profesion"], exclude: [] },
   { key: "education_level", recognize: ["nivel de estudios"], exclude: [] },
   // El monto de salario comparte fila con «Moneda» y «Frecuencia de pago»: se excluyen esos bloques.
-  { key: "salary", recognize: ["salario minimo", "salary"], exclude: ["moneda", "frecuencia de pago"] }
+  { key: "salary", recognize: ["salario minimo", "salary"], exclude: ["moneda", "frecuencia de pago"] },
+  { key: "city", recognize: ["donde quieres trabajar", "ciudad"], exclude: [] }
 ];
 
 const RULES: readonly RecognitionRule[] = RULE_SOURCES.map(rule => ({
@@ -79,6 +87,27 @@ export interface ComplementaryValues {
   readonly salary: string;
   /** Textos de las opciones a marcar, p. ej. ["Remoto", "Tiempo completo"]. */
   readonly workPreferences: readonly string[];
+  /** Ciudad del perfil (current_city), p. ej. "Medellín". */
+  readonly city: string;
+  /** País del perfil (current_country): decide entre ciudades con el mismo nombre. */
+  readonly country: string;
+}
+
+/**
+ * Qué tan bien una sugerencia de ciudad de Magneto («Medellín, Antioquia, Colombia») corresponde a la ciudad
+ * del perfil. 0 = no es esa ciudad. Magneto lista primero ciudades homónimas de otros países
+ * («Medellín, Veracruz…, México»), así que el país pesa más que el orden de la lista.
+ */
+export function cityOptionScore(optionText: string, city: string, country: string): number {
+  const parts = optionText.split(",").map(normalizeText).filter(Boolean);
+  const target = normalizeText(city);
+  if (!parts.length || !target) return 0;
+  const head = parts[0]!;
+  const nameScore = head === target ? 2 : head.startsWith(`${target} `) ? 1 : 0;
+  if (!nameScore) return 0;
+  const wantedCountry = normalizeText(country);
+  const countryScore = wantedCountry && parts.slice(1).includes(wantedCountry) ? 4 : 0;
+  return nameScore + countryScore;
 }
 
 /** Columnas booleanas de `profiles` que se convierten en una opción del modal cuando son verdaderas. */
@@ -239,6 +268,7 @@ export function educationLevelLabel(rows: readonly JsonRecord[]): string {
  * - Booleanos: willing_to_travel y willing_to_relocate.
  * - Texto: desired_area, desired_position y salary_expectation (número).
  * - education.level: nivel de estudios.
+ * - current_city y current_country: «¿Dónde quieres trabajar?».
  */
 export function resolveComplementaryValues(profile: JsonRecord, education: readonly JsonRecord[] = []): ComplementaryValues {
   const preferences = [
@@ -252,6 +282,8 @@ export function resolveComplementaryValues(profile: JsonRecord, education: reado
     jobTitle: readText(profile, "desired_position"),
     educationLevel: educationLevelLabel(education),
     salary: salaryDigits(profile),
-    workPreferences: [...new Set(preferences)]
+    workPreferences: [...new Set(preferences)],
+    city: readText(profile, "current_city"),
+    country: readText(profile, "current_country")
   };
 }

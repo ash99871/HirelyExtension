@@ -85,14 +85,49 @@
 .consent-value:hover { border-color: var(--line); }
 .consent-value:focus { text-align: left; border-color: var(--blue); background: #fff; outline: none; }
 
-/* Preguntas abiertas. Al usar la respuesta, la tarjeta se desvanece y se quita. */
-.card {
-  border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin-top: 10px;
-  transition: opacity .2s ease, transform .2s ease;
+/* «Necesitamos tu respuesta»: preguntas que Hirely no sabe responder. */
+.review > section + section { margin-top: 16px; }
+.ask-list { display: grid; gap: 8px; margin-top: 8px; }
+.ask-row { border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; display: grid; gap: 7px; }
+.ask-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.ask-label { font-weight: 600; font-size: 13px; line-height: 1.35; flex: 1 1 100%; overflow-wrap: anywhere; }
+.tag { font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); background: var(--row); border-radius: 999px; padding: 2px 7px; }
+.tag.required { color: var(--blue); background: var(--blue-soft); }
+.tag.sensitive { color: #8a5a00; background: #fff6e0; }
+.ask-input, .ask-select {
+  width: 100%; border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 10px;
+  background: #fff; color: var(--ink); font: 13px/1.4 system-ui, sans-serif;
 }
-.card.leaving { opacity: 0; transform: translateY(-6px); }
+textarea.ask-input { min-height: 70px; resize: vertical; }
+.ask-input:focus, .ask-select:focus { border-color: var(--blue); outline: none; }
+.ask-check { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+.ask-check input { accent-color: var(--blue); width: 15px; height: 15px; margin: 0; }
+.ask-hint { color: var(--muted); font-size: 11.5px; margin: 0; }
+.ask-note { color: var(--danger); font-size: 11.5px; margin: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  border: 1px solid var(--line-strong); background: #fff; color: var(--ink); border-radius: 999px;
+  padding: 6px 12px; font: 500 12.5px/1.2 system-ui, sans-serif; cursor: pointer; transition: background .15s, border-color .15s, color .15s;
+}
+.chip:hover { border-color: var(--muted); }
+.chip[aria-pressed="true"] { background: var(--blue); border-color: var(--blue); color: #fff; }
+.use-saved { justify-self: start; text-align: left; }
+.remember { display: flex; gap: 8px; align-items: center; margin-top: 12px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.remember input { accent-color: var(--blue); width: 15px; height: 15px; margin: 0; }
+.consent-body.multiline { display: grid; gap: 5px; }
+.consent-body.multiline .consent-label { max-width: none; }
+textarea.consent-value { text-align: left; min-height: 64px; resize: vertical; border-color: var(--line); }
 
-/* Pantalla final: no quedan preguntas por responder. */
+/* Aviso «Formulario detectado» junto al botón H. */
+.detected {
+  position: fixed; z-index: 2147483646; right: 18px; bottom: 76px;
+  border: 0; border-radius: 999px; padding: 8px 14px; cursor: pointer;
+  background: #fff; color: var(--ink); font: 600 12.5px/1.2 system-ui, sans-serif;
+  box-shadow: 0 8px 24px #3034361f, 0 0 0 1px var(--line); animation: rise .28s ease both;
+}
+.detected::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--blue); margin-right: 8px; vertical-align: 1px; }
+
+/* Pantalla final. */
 .done { display: grid; justify-items: center; text-align: center; padding: 18px 8px 6px; animation: rise .28s ease both; }
 .done-icon {
   width: 52px; height: 52px; border-radius: 50%; background: var(--blue-soft); color: var(--blue);
@@ -100,24 +135,21 @@
 }
 .done-icon svg { width: 26px; height: 26px; }
 .done-title { font-size: 17px; font-weight: 650; letter-spacing: -.01em; margin: 0; }
-.done-text { color: var(--muted); margin: 4px 0 0; max-width: 270px; }
-.done .actions { margin-top: 16px; }
+.done-text { color: var(--muted); margin: 4px 0 0; max-width: 280px; }
+.done-details { text-align: left; color: var(--ink); font-size: 12.5px; margin: 10px 0 0; padding-left: 18px; max-width: 300px; }
+.done-details li + li { margin-top: 3px; }
+.done .actions { margin-top: 16px; justify-content: center; }
+.rescan {
+  margin-top: 10px; border-radius: 999px; padding: 9px 16px; cursor: pointer;
+  font: 600 12.5px/1.2 system-ui, sans-serif;
+}
 .panel[data-view="done"] .foot { display: none; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .card, .done { transition: none; animation: none; }
+  .done, .detected { animation: none; }
 }
-.label { font-weight: 650; margin: 0 0 4px; }
-.badge { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
-.card textarea {
-  display: block; width: 100%; min-height: 76px; resize: vertical;
-  border: 1px solid var(--line-strong); border-radius: 10px; padding: 9px; background: #fff; color: var(--ink);
-  font: 12.5px/1.45 system-ui, sans-serif;
-}
-.card textarea:focus { border-color: var(--blue); outline: none; }
 
-.fab:focus-visible, .close:focus-visible, .actions button:focus-visible, .link:focus-visible,
-.consent-check:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.fab:focus-visible, .close:focus-visible, .actions button:focus-visible, .link:focus-visible, .chip:focus-visible,
+.detected:focus-visible, .consent-check:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 .foot { font-size: 11px; color: var(--muted); margin: 14px 0 0; }
-.empty { margin: 8px 0 0; color: var(--muted); }

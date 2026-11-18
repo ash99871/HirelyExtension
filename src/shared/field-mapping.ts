@@ -51,10 +51,11 @@ const EXCLUDED_INPUT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Si la etiqueta habla de OTRA entidad ("Company name", "School name", "Reference email"),
- * no se rellena con los datos personales del usuario.
+ * Si la etiqueta habla de OTRA entidad ("Company name", "School name", "Reference email") o de
+ * otro momento («Ciudad donde trabajó», «País de estudio»), no se rellena con los datos
+ * personales del usuario: se le pregunta.
  */
-const NON_SELF_CONTEXT = /\b(?:company|employer|school|university|college|reference|referee|manager|supervisor|emergency|spouse|parent|guardian|empresa|empleador|universidad|colegio|referencia|jefe|emergencia|conyuge|acudiente)\b/;
+const NON_SELF_CONTEXT = /\b(?:company|employer|school|university|college|reference|referee|manager|supervisor|emergency|spouse|parent|guardian|empresa|empleador|universidad|colegio|referencia|jefe|emergencia|conyuge|acudiente|trabajo|trabajaste|laboraste|estudio|estudios|estudiaste|institucion)\b/;
 
 function valueFor(profile: JsonRecord, keys: readonly string[]): string {
   for (const key of keys) {

@@ -11,8 +11,27 @@
  */
 import { fillElement, isRendered } from "./dom-fields";
 import {
+  CLICKABLE,
+  MAX_OPTION_TEXT,
+  TRIGGER_SELECTOR,
+  chosenChips,
+  clickEl,
+  closeStrayLists,
+  companionInput,
+  deepAll,
+  findSearchInput,
+  isInside,
+  isSelected,
+  parentOf,
+  sleep,
+  textOf,
+  typeText
+} from "./dom-actions";
+import {
   APPROX_MIN_COVERAGE,
-  MODAL_TITLE_PHRASE,
+  MODAL_SUBMIT_WORDS,
+  MODAL_TITLE_PHRASES,
+  cityOptionScore,
   optionCoverageScore,
   optionMatchScore,
   recognizeComplementaryField,
@@ -50,6 +69,8 @@ export interface ComplementaryResult {
   /** Contenedor del modal, o null si la página no muestra «Datos Complementarios». */
   readonly modal: Element | null;
   readonly steps: readonly ComplementaryStep[];
+  /** Control de cada paso (por su nombre, «Sector»…): para volver a preguntarlo si no se pudo llenar. */
+  readonly controls?: ReadonlyMap<string, Element>;
 }
 
 export interface ComplementaryOptions {
@@ -58,70 +79,33 @@ export interface ComplementaryOptions {
 }
 
 const DEFAULT_WAIT_MS = 250;
+/** Espera máxima por las sugerencias de ciudad (~5 s con 250 ms), que llegan de internet. */
+const CITY_POLLS = 20;
 const MAX_POLLS = 6;
 const MAX_HINT_TEXT = 160;
 const MAX_HINT_DEPTH = 4;
-const MAX_OPTION_TEXT = 120;
 const CONTROL_SELECTOR = "input, textarea, select";
-const CLICKABLE = [
-  '[role="option"]', '[role="menuitem"]', '[role="radio"]', '[role="checkbox"]', '[role="switch"]',
-  '[role="button"]', "button", "label", "li", "a"
-].join(", ");
-// Magneto usa CSS modules: «…card--selected___SkzRf». Se reconoce la palabra aunque vaya unida con guiones o guiones bajos.
-const SELECTED_CLASS = /(^|[\s_-])(selected|checked|active)([\s_-]|$)/i;
-/** Desplegable personalizado de Magneto (select2): el botón visible que lo abre. */
-const TRIGGER_SELECTOR = 'button[class*="select2-input_button"]';
-const SELECTED_ATTRIBUTE = '[aria-pressed="true"], [aria-checked="true"], [aria-selected="true"]';
 // «selected-approx» NO es OK: la opción se eligió por parecido y la persona debe confirmarla.
 const OK_STATUSES: ReadonlySet<StepStatus> = new Set(["filled", "selected", "already-selected", "already-filled"]);
 
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
-const textOf = (el: Element): string => normalizeText(el.textContent ?? "");
-
-/* ------------------------------ recorrido del DOM ------------------------------ */
-
-/** La raíz dada y todos los Shadow DOM abiertos que contiene. */
-function collectRoots(start: ParentNode): ParentNode[] {
-  const roots: ParentNode[] = [];
-  const visit = (node: ParentNode): void => {
-    roots.push(node);
-    for (const el of node.querySelectorAll<Element>("*")) {
-      if (el.shadowRoot) visit(el.shadowRoot);
-    }
-  };
-  visit(start);
-  return roots;
-}
-
-function deepAll<T extends Element>(start: ParentNode, selector: string): T[] {
-  return collectRoots(start).flatMap(root => [...root.querySelectorAll<T>(selector)]);
-}
-
-/** Padre en el árbol, cruzando el límite de un Shadow DOM hacia su host. */
-function parentOf(el: Element): Element | null {
-  if (el.parentElement) return el.parentElement;
-  const host = (el.getRootNode() as ShadowRoot).host as Element | undefined;
-  return host ?? null;
-}
-
-export function isInside(container: Element, el: Element): boolean {
-  for (let node: Element | null = el; node; node = parentOf(node)) {
-    if (node === container) return true;
-  }
-  return false;
-}
+export { isInside };
 
 /* ------------------------------ localizar el modal ------------------------------ */
 
 export function findComplementaryModal(): Element | null {
   const titles = deepAll<Element>(document, "*")
-    .filter(el => el.children.length <= 10 && isRendered(el) && textOf(el).includes(MODAL_TITLE_PHRASE))
+    .filter(el => {
+      if (el.children.length > 10 || !isRendered(el)) return false;
+      const text = textOf(el);
+      return MODAL_TITLE_PHRASES.some(phrase => text.includes(phrase));
+    })
     .sort((a, b) => a.querySelectorAll("*").length - b.querySelectorAll("*").length);
 
-  // Subir desde el título hasta el primer contenedor que también tenga el botón «Siguiente».
+  // Subir desde el título hasta el primer contenedor que también tenga el botón «Siguiente» o «Guardar».
   let node: Element | null = titles[0] ?? null;
   for (let depth = 0; node && depth < 12; depth++, node = parentOf(node)) {
-    if (deepAll<Element>(node, "button, [role='button']").some(button => textOf(button).includes("siguiente"))) {
+    const buttons = deepAll<Element>(node, "button, [role='button']");
+    if (buttons.some(button => MODAL_SUBMIT_WORDS.some(word => textOf(button).includes(word)))) {
       return node;
     }
   }
@@ -152,16 +136,6 @@ function ownBlockText(control: HTMLElement): string {
   }
   const text = textOf(block);
   return text.length <= MAX_HINT_TEXT ? text : "";
-}
-
-/** <input> oculto del mismo desplegable: lleva el nombre real del campo y su etiqueta. */
-function companionInput(trigger: Element): HTMLInputElement | null {
-  let node: Element | null = trigger.parentElement;
-  for (let depth = 0; node && depth < 2; depth++, node = node.parentElement) {
-    const input = node.querySelector("input");
-    if (input) return input as HTMLInputElement;
-  }
-  return null;
 }
 
 function hintsFor(control: HTMLElement): TextHint[] {
@@ -203,28 +177,6 @@ function locateControls(modal: Element): Map<ComplementaryKey, HTMLElement> {
 
 /* ------------------------------ acciones ------------------------------ */
 
-/** Dispara la secuencia completa de eventos que espera un framework; bloquea el envío de formularios. */
-function clickEl(el: Element): void {
-  (el as HTMLElement).scrollIntoView?.({ block: "center" });
-  // Un botón dentro de un <form> enviaría el formulario al pulsarlo: se cancela ese envío.
-  const root = el.getRootNode() as unknown as EventTarget;
-  const blockSubmit = (event: Event): void => event.preventDefault();
-  root.addEventListener("submit", blockSubmit, true);
-  try {
-    for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
-      el.dispatchEvent(new MouseEvent(type, { bubbles: true, composed: true, cancelable: true }));
-    }
-  } finally {
-    root.removeEventListener("submit", blockSubmit, true);
-  }
-}
-
-/** Escribe como lo haría el usuario: con el setter nativo y un evento input (sin blur, para no cerrar la lista). */
-function typeText(input: HTMLInputElement, text: string): void {
-  Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "value")?.set?.call(input, text);
-  input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-}
-
 interface OptionSearch {
   readonly modal: Element;
   /** true: solo opciones dentro del modal (chips). false: también listas que se abren fuera (portales). */
@@ -238,8 +190,9 @@ function findOption(wanted: string, search: OptionSearch): HTMLElement | null {
   let best: { el: Element; score: number; size: number } | null = null;
   const pool = search.anywhere ? deepAll<Element>(document, "*") : deepAll<Element>(search.modal, "*");
   for (const el of pool) {
-    const inModal = isInside(search.modal, el);
-    if (!inModal && search.before?.has(el)) continue;
+    // Con una lista recién abierta (`before`), solo cuenta lo que apareció al abrirla: nunca otros
+    // textos de la ventana (p. ej. el título del paso «Datos Complementarios» al buscar «Datos»).
+    if (search.before?.has(el)) continue;
     if (!isRendered(el)) continue;
     const text = el.textContent ?? "";
     if (text.length > MAX_OPTION_TEXT) continue;
@@ -269,9 +222,8 @@ async function waitForOption(wanted: string, search: OptionSearch, waitMs: numbe
 function findApproxOption(wanted: string, search: OptionSearch): HTMLElement | null {
   let best: { el: Element; coverage: number; length: number } | null = null;
   for (const el of deepAll<Element>(document, "*")) {
-    const inModal = isInside(search.modal, el);
-    if (!inModal && search.before?.has(el)) continue;
-    if (!el.matches('[role="option"], li') || !isRendered(el)) continue;
+    if (search.before?.has(el)) continue;
+    if (!el.matches('[role="option"], li, button[class*="list__item"]') || !isRendered(el)) continue;
     const text = el.textContent ?? "";
     if (!text || text.length > MAX_OPTION_TEXT) continue;
     const coverage = optionCoverageScore(text, wanted);
@@ -287,7 +239,8 @@ function findApproxOption(wanted: string, search: OptionSearch): HTMLElement | n
 /** Valor visible del control: el value de un <input>, o el texto de un botón de desplegable. */
 function currentText(control: HTMLElement): string {
   if (control.tagName === "INPUT" || control.tagName === "TEXTAREA") return (control as HTMLInputElement).value ?? "";
-  return textOf(control);
+  // Listas de varias opciones (Sector): lo elegido está en las etiquetas «×» de debajo, no en el botón.
+  return [textOf(control), ...chosenChips(control).map(normalizeText)].join(" ");
 }
 
 /** Resultado de elegir una opción: exacta si el texto coincide completo; si no, para revisar. */
@@ -347,15 +300,6 @@ async function pickSearchableTrigger(trigger: HTMLElement, wanted: string, modal
   return resolveOpenOption(wanted, { modal, anywhere: true, before }, waitMs);
 }
 
-/** Campo de texto visible que abrió el desplegable: primero dentro de él, luego uno nuevo en la página. */
-function findSearchInput(trigger: Element, before: ReadonlySet<Element>): HTMLInputElement | null {
-  const container = trigger.parentElement;
-  const visible = deepAll<HTMLInputElement>(document, "input").filter(input =>
-    isRendered(input) && !input.disabled && !input.readOnly && ["", "text", "search"].includes(input.type));
-  const local = container ? visible.find(input => isInside(container, input)) : undefined;
-  return local ?? visible.find(input => !before.has(input)) ?? null;
-}
-
 async function pickSuggestion(control: HTMLElement, wanted: string, modal: Element, waitMs: number): Promise<Outcome> {
   if (control.tagName !== "INPUT") return pickSearchableTrigger(control, wanted, modal, waitMs);
   const input = control as HTMLInputElement;
@@ -366,23 +310,64 @@ async function pickSuggestion(control: HTMLElement, wanted: string, modal: Eleme
   return resolveOpenOption(wanted, { modal, anywhere: true, before }, waitMs);
 }
 
+/**
+ * «¿Dónde quieres trabajar?»: se abre el desplegable, se escribe la ciudad y se elige la sugerencia
+ * de la ciudad del perfil EN el país del perfil. Magneto pone primero ciudades homónimas de otros
+ * países («Medellín, Veracruz…, México» antes de «Medellín, Antioquia, Colombia»).
+ */
+async function pickCity(control: HTMLElement, city: string, country: string, waitMs: number): Promise<Outcome> {
+  if (normalizeText(currentText(control)).startsWith(normalizeText(city))) return { status: "already-filled" };
+  const before = new Set(deepAll<Element>(document, "*"));
+  let search: HTMLInputElement | null = control.tagName === "INPUT" ? control as HTMLInputElement : null;
+  if (!search) {
+    clickEl(control);
+    for (let poll = 0; poll < MAX_POLLS && !search; poll++) {
+      search = findSearchInput(control, before);
+      if (!search) await sleep(waitMs);
+    }
+  }
+  if (!search) return { status: "option-not-found", detail: "no encontré dónde escribir" };
+
+  search.focus();
+  typeText(search, city);
+  // La lista de ciudades se busca en internet: la primera vez puede tardar varios segundos.
+  for (let poll = 0; poll < CITY_POLLS; poll++) {
+    await sleep(waitMs);
+    // Si a mitad de la espera no ha llegado nada, se vuelve a escribir (por si la búsqueda no arrancó).
+    if (poll === Math.floor(CITY_POLLS / 2)) {
+      typeText(search, "");
+      typeText(search, city);
+    }
+    let best: { el: Element; score: number } | null = null;
+    for (const el of deepAll<Element>(document, CLICKABLE)) {
+      if (before.has(el) || !isRendered(el)) continue;
+      const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+      if (!text || text.length > MAX_OPTION_TEXT) continue;
+      const score = cityOptionScore(text, city, country);
+      if (score && (!best || score > best.score)) best = { el, score };
+    }
+    // Con el país del perfil, solo vale una ciudad de ese país: se sigue esperando (las de otros
+    // países suelen llegar primero) y, si no aparece, no se elige nada y se le pregunta a la persona.
+    if (best && country && best.score < 4) best = null;
+    if (best) {
+      clickEl(best.el);
+      const text = (best.el.textContent ?? "").replace(/\s+/g, " ").trim();
+      // Siempre se informa cuál se eligió (hay ciudades con el mismo nombre en otros países). Con el país
+      // del perfil en la sugerencia, la ciudad es la correcta; sin país (o sin coincidir), se pide revisar.
+      return best.score >= 4
+        ? { status: "selected", detail: text }
+        : { status: "selected-approx", detail: text };
+    }
+  }
+  return { status: "option-not-found" };
+}
+
 function fillSalary(control: HTMLElement, amount: string): StepStatus {
   const input = control as HTMLInputElement;
   const current = input.value.replace(/\D/g, "");
   // «0» es el valor por defecto de Magneto: se trata como vacío. Cualquier otro número se respeta.
   if (current && current !== "0") return "already-filled";
   return fillElement(input, amount, { overwrite: true }) === "filled" ? "filled" : "not-written";
-}
-
-/** Marca una tarjeta o botón de elección dentro del modal. */
-function isSelected(el: Element): boolean {
-  if (el.querySelector('input[type="checkbox"]:checked, input[type="radio"]:checked')) return true;
-  let node: Element | null = el;
-  for (let depth = 0; node && depth < 3; depth++, node = parentOf(node)) {
-    if (node.matches(SELECTED_ATTRIBUTE)) return true;
-    if (SELECTED_CLASS.test(node.getAttribute("class") ?? "")) return true;
-  }
-  return false;
 }
 
 async function pickChoice(wanted: string, modal: Element, waitMs: number): Promise<StepStatus> {
@@ -411,20 +396,27 @@ export interface ComplementaryPlanItem {
 export interface ComplementaryPlan {
   readonly modal: Element | null;
   readonly items: readonly ComplementaryPlanItem[];
+  /**
+   * Controles que este adaptador va a llenar (los de `items`). Las preguntas del panel los
+   * ignoran para no preguntar dos veces lo mismo.
+   */
+  readonly handled: readonly Element[];
 }
 
 const PLAN_TARGETS: Readonly<Record<ComplementaryKey, string>> = {
   sector: "Sector",
   job_title: "Cargo",
   education_level: "Nivel de estudios",
-  salary: "Salario"
+  salary: "Salario",
+  city: "Ciudad"
 };
 
 const PLAN_VALUES: Readonly<Record<ComplementaryKey, (values: ComplementaryValues) => string>> = {
   sector: values => values.sector,
   job_title: values => values.jobTitle,
   education_level: values => values.educationLevel,
-  salary: values => values.salary
+  salary: values => values.salary,
+  city: values => values.city
 };
 
 /** ¿El control ya tiene ese valor (o, en el salario, cualquier monto distinto de 0)? */
@@ -443,36 +435,42 @@ function controlAlreadyHas(key: ComplementaryKey, control: HTMLElement, value: s
  */
 export function planComplementaryModal(values: ComplementaryValues): ComplementaryPlan {
   const modal = findComplementaryModal();
-  if (!modal) return { modal: null, items: [] };
+  if (!modal) return { modal: null, items: [], handled: [] };
 
   const controls = locateControls(modal);
   const items: ComplementaryPlanItem[] = [];
+  const handled: Element[] = [];
   for (const key of Object.keys(PLAN_TARGETS) as ComplementaryKey[]) {
     const value = PLAN_VALUES[key](values);
     const control = controls.get(key);
     if (!value || !control || controlAlreadyHas(key, control, value)) continue;
     items.push({ key, target: PLAN_TARGETS[key], value });
+    handled.push(control);
   }
   for (const preference of values.workPreferences) {
     const option = findOption(preference, { modal, anywhere: false });
     if (!option || isSelected(option)) continue;
     items.push({ key: "preference", target: "Opción", value: preference });
+    handled.push(option);
   }
-  return { modal, items };
+  return { modal, items, handled };
 }
 
 /**
  * Valores para `fillComplementaryModal` con SOLO lo que la persona autorizó (y como lo editó).
- * Lo que no aparece en `approved` queda vacío y, por tanto, no se toca.
+ * Lo que no aparece en `approved` queda vacío y, por tanto, no se toca. `base` aporta el país del
+ * perfil, que no se muestra en la lista pero sirve para elegir la ciudad correcta.
  */
-export function authorizedComplementaryValues(approved: readonly ComplementaryPlanItem[]): ComplementaryValues {
+export function authorizedComplementaryValues(approved: readonly ComplementaryPlanItem[], base?: ComplementaryValues): ComplementaryValues {
   const pick = (key: ComplementaryKey): string => approved.find(item => item.key === key)?.value.trim() ?? "";
   return {
     sector: pick("sector"),
     jobTitle: pick("job_title"),
     educationLevel: pick("education_level"),
     salary: pick("salary").replace(/\D/g, ""),
-    workPreferences: approved.filter(item => item.key === "preference").map(item => item.value)
+    workPreferences: approved.filter(item => item.key === "preference").map(item => item.value),
+    city: pick("city"),
+    country: base?.country ?? ""
   };
 }
 
@@ -482,12 +480,16 @@ async function runStep(
   steps: ComplementaryStep[],
   target: string,
   control: HTMLElement | undefined,
-  action: (el: HTMLElement) => StepStatus | Outcome | Promise<StepStatus | Outcome>
+  action: (el: HTMLElement) => StepStatus | Outcome | Promise<StepStatus | Outcome>,
+  used?: Map<string, Element>
 ): Promise<void> {
   if (!control) {
     steps.push({ target, status: "control-not-found" });
     return;
   }
+  used?.set(target, control);
+  // Una lista que quedó abierta (p. ej. la de Sector, que admite varias) se tragaría el clic del siguiente campo.
+  await closeStrayLists(DEFAULT_WAIT_MS);
   const result = await action(control);
   if (typeof result === "string") {
     steps.push({ target, status: result });
@@ -509,23 +511,29 @@ export async function fillComplementaryModal(values: ComplementaryValues, option
 
   const controls = locateControls(modal);
   const steps: ComplementaryStep[] = [];
+  const used = new Map<string, Element>();
 
   if (values.sector) {
-    await runStep(steps, "Sector", controls.get("sector"), el => pickFromCombobox(el, values.sector, modal, waitMs));
+    await runStep(steps, "Sector", controls.get("sector"), el => pickFromCombobox(el, values.sector, modal, waitMs), used);
   }
   if (values.jobTitle) {
-    await runStep(steps, "Cargo", controls.get("job_title"), el => pickSuggestion(el, values.jobTitle, modal, waitMs));
+    await runStep(steps, "Cargo", controls.get("job_title"), el => pickSuggestion(el, values.jobTitle, modal, waitMs), used);
   }
   if (values.educationLevel) {
-    await runStep(steps, "Nivel de estudios", controls.get("education_level"), el => pickFromCombobox(el, values.educationLevel, modal, waitMs));
+    await runStep(steps, "Nivel de estudios", controls.get("education_level"), el => pickFromCombobox(el, values.educationLevel, modal, waitMs), used);
   }
   if (values.salary) {
-    await runStep(steps, "Salario", controls.get("salary"), el => fillSalary(el, values.salary));
+    await runStep(steps, "Salario", controls.get("salary"), el => fillSalary(el, values.salary), used);
+  }
+  if (values.city) {
+    await runStep(steps, "Ciudad", controls.get("city"), el => pickCity(el, values.city, values.country, waitMs), used);
   }
   for (const preference of values.workPreferences) {
     steps.push({ target: `Opción: ${preference}`, status: await pickChoice(preference, modal, waitMs) });
   }
-  return { modal, steps };
+  // Al terminar no debe quedar ninguna lista abierta (la de Sector admite varias y queda abierta).
+  await closeStrayLists(waitMs);
+  return { modal, steps, controls: used };
 }
 
 /** Frase corta para el panel: cuántos pasos quedaron listos y cuáles revisar. */

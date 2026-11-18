@@ -4,7 +4,7 @@ import { installDom } from "./helpers/dom";
 import { applyFieldMatches, fillElement, scanFormFields } from "../src/content/dom-fields";
 import { matchFieldsToValues, resolveAutofillValues } from "../src/shared/field-mapping";
 import { detectOpenQuestions } from "../src/shared/question-detection";
-import { mountAssistantUi } from "../src/content/assistant-ui";
+import { mountAssistantUi, type AskItem, type AssistantUi, type AssistantUiHandlers } from "../src/content/assistant-ui";
 
 const FORM = `
 <form>
@@ -130,73 +130,93 @@ test("escáner: respeta el límite de campos y cede el hilo en formularios enorm
   assert.ok(elapsed < 2000, `el escaneo no debe ser cuadrático (tardó ${elapsed.toFixed(0)} ms)`);
 });
 
-test("Shadow DOM: raíz cerrada, estilos dentro de la sombra, nada del panel en el DOM de la página", () => {
+const askItem = (over: Partial<AskItem> = {}): AskItem => ({
+  id: "q1", label: "¿Por qué?", kind: "long-text", options: [], required: false, optional: false,
+  sensitive: false, searchable: false, inputType: "", ...over
+});
+
+function mountWithShadow(handlers: Partial<AssistantUiHandlers> = {}): { ui: AssistantUi; shadow: ShadowRoot } {
   let shadow: ShadowRoot | undefined;
   const original = Element.prototype.attachShadow;
   Element.prototype.attachShadow = function (init) { shadow = original.call(this, init); return shadow; };
+  const ui = mountAssistantUi({ onLaunch() {}, onClosed() {}, ...handlers });
+  Element.prototype.attachShadow = original;
+  return { ui, shadow: shadow! };
+}
+
+test("Shadow DOM: raíz cerrada, estilos dentro de la sombra, nada del panel en el DOM de la página", () => {
   const events: string[] = [];
   document.addEventListener("keydown", e => events.push(e.type));
   document.addEventListener("click", e => events.push(e.type));
-
-  const ui = mountAssistantUi({ onLaunch() {}, onUseAnswer: () => true, onSaveAnswer: async () => true, onClosed() {} });
-  Element.prototype.attachShadow = original;
+  const { ui, shadow } = mountWithShadow();
 
   const host = document.getElementById("hirely-assistant-root")!;
   assert.equal(host.shadowRoot, null, "modo closed: el código de la página no puede inspeccionar el panel");
-  assert.ok(shadow, "se creó un shadow root");
   assert.equal(document.querySelector(".panel, .fab"), null, "ni .panel ni .fab existen en el DOM de la página");
-  assert.ok(shadow!.querySelector("style") ?? shadow!.adoptedStyleSheets?.length, "los estilos están dentro de la sombra");
+  assert.ok(shadow.querySelector("style") ?? shadow.adoptedStyleSheets?.length, "los estilos están dentro de la sombra");
   assert.equal(document.querySelectorAll("style").length, 0, "no se inyecta ningún <style> en el documento");
 
   ui.openPanel();
-  ui.renderQuestions([{ id: "q", label: "¿Por qué?", initialAnswer: "porque sí", similarity: 0.5 }]);
-  const textarea = shadow!.querySelector("textarea")!;
+  void ui.requestReview({ found: [], ask: [askItem({ initial: { id: "q1", text: "porque sí" } })] });
+  const textarea = shadow.querySelector("textarea")!;
+  assert.equal(textarea.value, "porque sí");
   textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "h", bubbles: true, composed: true }));
-  shadow!.querySelector<HTMLButtonElement>(".use")!.click();
+  shadow.querySelector<HTMLButtonElement>(".chip, .remember input, .authorize")!.click();
   assert.deepEqual(events, [], "ni teclas ni clics del panel llegan a los manejadores globales del sitio");
 
   ui.closePanel();
-  assert.equal(shadow!.querySelectorAll(".card").length, 0, "al cerrar se descartan las respuestas del DOM");
+  assert.equal(shadow.querySelectorAll(".ask-row").length, 0, "al cerrar se descartan las respuestas del DOM");
   ui.destroy();
   assert.equal(document.getElementById("hirely-assistant-root"), null);
 });
 
-test("el panel monta de forma idempotente y delega las acciones sin conocer los campos", async () => {
+test("el panel monta de forma idempotente y devuelve lo autorizado y respondido", async () => {
   const calls: string[] = [];
-  let shadow: ShadowRoot | undefined;
-  const original = Element.prototype.attachShadow;
-  Element.prototype.attachShadow = function (init) { shadow = original.call(this, init); return shadow; };
-  mountAssistantUi({ onLaunch() {}, onUseAnswer: () => true, onSaveAnswer: async () => true, onClosed() {} });
-  const ui = mountAssistantUi({
-    onLaunch: () => calls.push("launch"),
-    onUseAnswer: (id, text) => { calls.push(`use:${id}:${text}`); return true; },
-    onSaveAnswer: async (id, text) => { calls.push(`save:${id}:${text}`); return true; },
-    onClosed: () => calls.push("closed")
-  });
-  Element.prototype.attachShadow = original;
+  mountWithShadow();
+  const { ui, shadow } = mountWithShadow({ onLaunch: () => calls.push("launch"), onClosed: () => calls.push("closed") });
   assert.equal(document.querySelectorAll("#hirely-assistant-root").length, 1, "re-montar no duplica el host");
 
-  shadow!.querySelector<HTMLButtonElement>(".fab")!.click();
+  shadow.querySelector<HTMLButtonElement>(".fab")!.click();
   ui.openPanel();
-  ui.renderQuestions([{ id: "q1", label: "Pregunta", initialAnswer: "Respuesta" }]);
-  shadow!.querySelector<HTMLButtonElement>(".use")!.click();
-  const save = shadow!.querySelector<HTMLButtonElement>(".save")!;
-  save.click();
-  await new Promise(r => setTimeout(r, 0));
-  assert.equal(save.textContent, "Guardada ✓");
+  const pending = ui.requestReview({
+    found: [{ id: "f1", label: "Nombre", value: "Ana", editable: true }],
+    ask: [
+      askItem({ id: "q1", kind: "choice", label: "Estado civil", options: [{ id: "o1", label: "Soltero(a)" }, { id: "o2", label: "Casado(a)" }] }),
+      askItem({ id: "q2", kind: "multi", label: "Disponibilidad", options: [{ id: "o1", label: "Mañana" }, { id: "o2", label: "Tarde" }] }),
+      askItem({ id: "q3", kind: "text", label: "Título obtenido" })
+    ]
+  });
+  const authorize = shadow.querySelector<HTMLButtonElement>(".authorize")!;
+  assert.equal(authorize.textContent, "Autorizar y llenar (1)", "solo cuenta el dato encontrado");
+  const [civil, availability] = [...shadow.querySelectorAll<HTMLElement>(".ask-row .chips")];
+  civil!.querySelectorAll<HTMLButtonElement>(".chip")[0]!.click();
+  civil!.querySelectorAll<HTMLButtonElement>(".chip")[1]!.click(); // una sola opción: reemplaza la anterior
+  availability!.querySelectorAll<HTMLButtonElement>(".chip").forEach(chip => chip.click()); // varias
+  const title = shadow.querySelector<HTMLInputElement>('.ask-row[data-kind="text"] input')!;
+  title.value = "Ingeniería";
+  title.dispatchEvent(new Event("input"));
+  assert.equal(authorize.textContent, "Autorizar y llenar (4)");
+  authorize.click();
+  const result = await pending;
+  assert.deepEqual(result, {
+    approvals: [{ id: "f1", value: "Ana" }],
+    answers: [{ id: "q1", optionIds: ["o2"] }, { id: "q2", optionIds: ["o1", "o2"] }, { id: "q3", text: "Ingeniería" }],
+    remember: true
+  });
   ui.closePanel();
-  assert.deepEqual(calls, ["launch", "use:q1:Respuesta", "save:q1:Respuesta", "closed"]);
+  assert.deepEqual(calls, ["launch", "closed"]);
 });
 
 test("el contenido del usuario se inserta como texto, nunca como HTML (sin XSS)", () => {
-  let shadow: ShadowRoot | undefined;
-  const original = Element.prototype.attachShadow;
-  Element.prototype.attachShadow = function (init) { shadow = original.call(this, init); return shadow; };
-  const ui = mountAssistantUi({ onLaunch() {}, onUseAnswer: () => true, onSaveAnswer: async () => true, onClosed() {} });
-  Element.prototype.attachShadow = original;
+  const { ui, shadow } = mountWithShadow();
   ui.openPanel();
-  ui.renderQuestions([{ id: "x", label: `<img src=x onerror=alert(1)>`, initialAnswer: `<script>alert(1)</script>` }]);
-  assert.equal(shadow!.querySelector("img"), null);
-  assert.equal(shadow!.querySelector("script"), null);
-  assert.equal(shadow!.querySelector(".label")!.textContent, `<img src=x onerror=alert(1)>`);
+  void ui.requestReview({
+    found: [{ id: "f", label: `<img src=x onerror=alert(1)>`, value: `<script>alert(1)</script>`, editable: false }],
+    ask: [askItem({ kind: "choice", label: `<b>pregunta</b>`, options: [{ id: "o1", label: `<img src=y onerror=alert(2)>` }] })]
+  });
+  assert.equal(shadow.querySelector("img"), null);
+  assert.equal(shadow.querySelector("script"), null);
+  assert.equal(shadow.querySelector("b"), null);
+  assert.equal(shadow.querySelector(".consent-label")!.textContent, `<img src=x onerror=alert(1)>`);
+  assert.equal(shadow.querySelector(".chip")!.textContent, `<img src=y onerror=alert(2)>`);
 });

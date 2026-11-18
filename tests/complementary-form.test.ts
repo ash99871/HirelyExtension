@@ -56,7 +56,9 @@ test("resolveComplementaryValues usa las columnas reales del esquema", () => {
     jobTitle: "Auxiliar Contable",
     educationLevel: "Tecnólogo",
     salary: "2000000",
-    workPreferences: ["Remoto", "Disponible para viajar", "Tiempo completo"]
+    workPreferences: ["Remoto", "Disponible para viajar", "Tiempo completo"],
+    city: "",
+    country: ""
   });
 });
 

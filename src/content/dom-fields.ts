@@ -6,6 +6,7 @@
  * La lógica de negocio (src/shared/*) nunca ve un Element.
  */
 import type { FieldDescriptor, FieldKind, FieldMatch, FieldOption } from "../shared/types";
+import { dateDigits } from "../shared/form-questions";
 import { yieldToMain } from "./scheduling";
 
 export type FillableElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
@@ -159,10 +160,27 @@ export function isRendered(element: Element): boolean {
   return !element.closest('[hidden], [style*="display: none"], [style*="display:none"]');
 }
 
-function isUsable(element: FillableElement): boolean {
+export function isUsable(element: FillableElement): boolean {
   if (element.disabled) return false;
   if (!isSelect(element) && element.readOnly) return false;
   return isRendered(element);
+}
+
+/**
+ * Lector de etiquetas para campos sueltos (fuera de `scanFormFields`): indexa los `label[for]`
+ * una sola vez por raíz (documento o Shadow DOM) y luego lee cada campo con las mismas reglas.
+ */
+export function makeLabelReader(): (element: FillableElement) => string {
+  const contexts = new Map<Node, LabelContext>();
+  return element => {
+    const root = element.getRootNode() as Document | ShadowRoot;
+    let context = contexts.get(root);
+    if (!context) {
+      context = buildLabelContext(root);
+      contexts.set(root, context);
+    }
+    return readLabel(element, context);
+  };
 }
 
 function describeElement(element: FillableElement, id: string, labelIndex: LabelContext): FieldDescriptor {
@@ -279,6 +297,36 @@ export function fillElement(element: FillableElement, value: string, options: { 
   return "filled";
 }
 
+/** ¿Es un campo de teléfono? (tipo tel, o el nombre/placeholder/etiqueta lo dice). */
+export function looksLikePhone(element: FillableElement): boolean {
+  if (element instanceof HTMLInputElement && element.type === "tel") return true;
+  const hints = [element.getAttribute("placeholder"), element.getAttribute("aria-label"), element.getAttribute("name"), element.id]
+    .join(" ")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  return /telefono|celular|movil|phone|mobile|whatsapp/.test(hints);
+}
+
+/**
+ * Teléfono: «+57 316 332 4904». Muchos formularios tienen el indicativo del país en otra casilla
+ * y solo aceptan los dígitos nacionales («3163324904»); si la página rechaza el valor, la casilla
+ * queda vacía. Se prueba primero lo más probable y se comprueba que el valor quedó escrito.
+ */
+export async function fillPhone(element: FillableElement, value: string): Promise<boolean> {
+  const digits = value.replace(/\D/g, "");
+  // Con indicativo («+57 316…», 12 dígitos), los formularios lo piden en su propia casilla y el
+  // número va sin él: «3163324904». Solo si eso no queda escrito se prueba lo demás.
+  const national = digits.length > 10 ? digits.slice(-10) : digits;
+  const candidates = [...new Set([national, value, digits])].filter(Boolean);
+  for (const [index, candidate] of candidates.entries()) {
+    // Solo se reescribe lo que la extensión misma intentó y la página rechazó.
+    if (index > 0 && element.value.replace(/\D/g, "").length >= 7) return true;
+    if (fillElement(element, candidate, { overwrite: index > 0 }) !== "filled") return false;
+    await new Promise(resolve => setTimeout(resolve, 60));
+    if (element.value.replace(/\D/g, "").length >= 7) return true;
+  }
+  return false;
+}
+
 export interface FillReport {
   /** ids de los descriptores que se rellenaron. */
   readonly filled: ReadonlySet<string>;
@@ -296,18 +344,43 @@ export function applyFieldMatches(matches: readonly FieldMatch[], elements: Read
   return { filled, skipped };
 }
 
+/* ------------------------- fechas en 8 casillas (Magneto) ------------------------- */
+
 /**
- * Adaptador para la fecha de nacimiento de Magneto: ese formulario representa
- * DD/MM/AAAA mediante ocho inputs independientes de un solo carácter. No se
- * agregan al escaneo genérico porque cada input, por separado, no es una fecha.
+ * Magneto escribe una fecha DD/MM/AAAA en ocho inputs de un solo carácter («Fecha de nacimiento»,
+ * «Fecha y ciudad de nacimiento»…). No se agregan al escaneo genérico porque cada input, por
+ * separado, no es una fecha: se tratan como un solo campo.
  */
-/** Grupo de 8 casillas VACÍAS de la fecha de nacimiento de Magneto, o null. Solo lee: no escribe nada. */
-export function findMagnetoBirthDateGroup(): HTMLInputElement[] | null {
-  const roots: ParentNode[] = [document];
+const DIGIT_SELECTOR = 'input[maxlength="1"]';
+
+export interface DigitDateGroup {
+  readonly inputs: HTMLInputElement[];
+  /** Texto normalizado que rodea al grupo, p. ej. «fecha y ciudad de nacimiento». */
+  readonly context: string;
+  readonly isBirthDate: boolean;
+  readonly empty: boolean;
+}
+
+/** Casilla de un dígito de una fecha: teclado numérico, o marcador «D», «M», «A» o «Y». */
+function isDigitBox(input: HTMLInputElement): boolean {
+  const placeholder = (input.getAttribute("placeholder") ?? "").trim().toUpperCase();
+  return input.getAttribute("inputmode") === "numeric" || /^[DMAY]$/.test(placeholder);
+}
+
+function digitBoxesIn(node: ParentNode): HTMLInputElement[] {
+  return Array.from(node.querySelectorAll<HTMLInputElement>(DIGIT_SELECTOR)).filter(isDigitBox);
+}
+
+function normalizeDateLabel(value: string): string {
+  return value.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Todas las fechas de 8 casillas dentro de `scope` (y sus Shadow DOM abiertos). Solo lee. */
+export function findDigitDateGroups(scope: ParentNode = document): DigitDateGroup[] {
+  const roots: ParentNode[] = [scope];
   const visited = new Set<ParentNode>(roots);
   for (let index = 0; index < roots.length; index++) {
-    const current = roots[index]!;
-    for (const host of current.querySelectorAll<Element>("*")) {
+    for (const host of roots[index]!.querySelectorAll<Element>("*")) {
       const shadow = host.shadowRoot;
       if (shadow && !visited.has(shadow)) {
         visited.add(shadow);
@@ -316,40 +389,55 @@ export function findMagnetoBirthDateGroup(): HTMLInputElement[] | null {
     }
   }
 
+  const seen = new Set<HTMLInputElement>();
+  const groups: DigitDateGroup[] = [];
   for (const root of roots) {
-    const candidates = Array.from(root.querySelectorAll<HTMLInputElement>(
-      'input[maxlength="1"][inputmode="numeric"]'
-    )).filter(input => isUsable(input));
-
-    for (const first of candidates) {
-      // Buscar el contenedor más cercano que identifique inequívocamente el grupo.
-      let container: Element | null = first.parentElement;
-      for (let depth = 0; container && depth < 6; depth++, container = container.parentElement) {
-        const text = normalizeDateLabel(container.textContent ?? "");
-        if (!text.includes("fecha de nacimiento")) continue;
-
-        const group = Array.from(container.querySelectorAll<HTMLInputElement>(
-          'input[maxlength="1"][inputmode="numeric"]'
-        ));
-        if (group.length !== 8 || group.some(input => !isUsable(input))) continue;
-        // Si la persona ya escribió algo, no se ofrece ni se toca.
-        if (group.some(input => input.value.trim() !== "")) return null;
-        return group;
+    for (const first of digitBoxesIn(root)) {
+      if (seen.has(first) || !isUsable(first)) continue;
+      // El contenedor más pequeño con exactamente 8 casillas es el grupo.
+      let wrapper: Element | null = first.parentElement;
+      let inputs: HTMLInputElement[] | null = null;
+      for (let depth = 0; wrapper && depth < 6; depth++, wrapper = wrapper.parentElement) {
+        const inside = digitBoxesIn(wrapper);
+        if (inside.length === 8) {
+          inputs = inside;
+          break;
+        }
+        if (inside.length > 8) break;
       }
+      if (!inputs || !wrapper || inputs.some(input => !isUsable(input))) continue;
+      for (const input of inputs) seen.add(input);
+
+      // Texto alrededor (sin salir del bloque de esta fecha) para saber qué fecha es.
+      let context = "";
+      for (let node: Element | null = wrapper, depth = 0; node && depth < 6; depth++, node = node.parentElement) {
+        if (digitBoxesIn(node).length !== 8) break;
+        const text = normalizeDateLabel(node.textContent ?? "");
+        if (/[a-z]/.test(text)) {
+          context = text;
+          if (text.includes("fecha")) break;
+        }
+      }
+      groups.push({
+        inputs,
+        context,
+        isBirthDate: context.includes("nacimiento"),
+        empty: inputs.every(input => input.value.trim() === "")
+      });
     }
   }
-  return null;
+  return groups;
 }
 
-/** Fecha del perfil para mostrarla en la autorización: «1998-03-15» → «15/03/1998». null si no es válida. */
-export function formatBirthDate(rawValue: string): string | null {
-  const digits = normalizeBirthDateDigits(rawValue);
-  return digits ? `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}` : null;
+/** Grupo de 8 casillas VACÍAS de la fecha de nacimiento, o null (también si ya tiene algo escrito). Solo lee. */
+export function findMagnetoBirthDateGroup(scope: ParentNode = document): HTMLInputElement[] | null {
+  const group = findDigitDateGroups(scope).find(item => item.isBirthDate);
+  return group?.empty ? group.inputs : null;
 }
 
-/** Escribe la fecha en las 8 casillas. Acepta AAAA-MM-DD, DD/MM/AAAA o DDMMAAAA. */
-export function fillMagnetoBirthDate(rawValue: string, group: HTMLInputElement[] | null = findMagnetoBirthDateGroup()): boolean {
-  const digits = normalizeBirthDateDigits(rawValue);
+/** Escribe una fecha en sus 8 casillas. Acepta AAAA-MM-DD, DD/MM/AAAA o DDMMAAAA. */
+export function fillDigitDate(rawValue: string, group: readonly HTMLInputElement[] | null): boolean {
+  const digits = dateDigits(rawValue);
   if (!digits || !group || group.length !== 8) return false;
   // Se vuelve a comprobar: la página pudo cambiar entre la autorización y el llenado.
   if (group.some(input => !input.isConnected || !isUsable(input) || input.value.trim() !== "")) return false;
@@ -367,30 +455,6 @@ export function fillMagnetoBirthDate(rawValue: string, group: HTMLInputElement[]
   group[group.length - 1]!.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
   group[group.length - 1]!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
   return true;
-}
-
-function normalizeDateLabel(value: string): string {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-/** Convierte YYYY-MM-DD o DD/MM/YYYY a los ocho dígitos DDMMYYYY. */
-function normalizeBirthDateDigits(rawValue: string): string | null {
-  const value = rawValue.trim();
-  let day = "", month = "", year = "";
-  let match = value.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:T.*)?$/);
-  if (match) {
-    year = match[1]!; month = match[2]!; day = match[3]!;
-  } else {
-    match = value.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
-    if (match) { day = match[1]!; month = match[2]!; year = match[3]!; }
-    else if (/^\d{8}$/.test(value)) {
-      day = value.slice(0, 2); month = value.slice(2, 4); year = value.slice(4);
-    } else return null;
-  }
-  const d = Number(day), m = Number(month), y = Number(year);
-  const date = new Date(Date.UTC(y, m - 1, d));
-  if (y < 1900 || y > 2100 || date.getUTCFullYear() !== y || date.getUTCMonth() !== m - 1 || date.getUTCDate() !== d) return null;
-  return `${String(d).padStart(2, "0")}${String(m).padStart(2, "0")}${year}`;
 }
 
 export const MAGNETO_SELECTORS = [

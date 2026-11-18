@@ -10,8 +10,11 @@ URL de creación de cuenta: https://isaparras23-hirely-web-hirely-09.hirelyeafit
 - Inicio/cierre de sesión con Supabase Auth.
 - Lee tu perfil (`public.profiles`) y rellena campos de formularios por etiqueta, `aria-label`, `aria-labelledby`, placeholder, `name` y `autocomplete` (ES/EN).
 - **Pide autorización antes de llenar**: muestra «Encontramos esta información para estos campos» con cada dato, y solo llena lo que la persona deja marcado (ver «Autorización»).
-- Detecta preguntas abiertas y sugiere respuestas guardadas (similitud léxica local, sin IA).
-- Panel sobre la página (aislado con Shadow DOM) para revisar, insertar o guardar respuestas. **Nunca envía el formulario.**
+- **Pregunta lo que no sabe**: todo campo vacío del formulario (texto, listas, radios, casillas, botones de opción y los desplegables propios de Magneto) aparece en «Necesitamos tu respuesta» y se responde desde el panel (ver «Formulario completo»).
+- **Revisa que no quede nada vacío**: después de llenar vuelve a mirar el formulario, pide lo obligatorio que falte y termina con un resumen.
+- **Recuerda las respuestas** (si la persona quiere) en `saved_answers` para proponerlas la próxima vez. Nunca los datos sensibles.
+- Avisa «Formulario detectado · N campos» junto al botón «H» cuando aparece un formulario con campos vacíos.
+- Panel sobre la página (aislado con Shadow DOM). **Nunca envía el formulario** ni pulsa «Guardar» o «Siguiente».
 - Gestión de respuestas guardadas desde el popup.
 
 ## Estructura
@@ -21,18 +24,22 @@ public/                 Estáticos de la extensión (única fuente): manifest.js
 src/
   shared/               Lógica compartida
     types.ts · text-similarity.ts · field-mapping.ts · question-detection.ts · question-matching.ts
+    complementary-data.ts · form-questions.ts
                         ← PURAS: sin DOM ni `chrome` (el compilador lo exige, ver "Arquitectura")
     errors.ts · http.ts · jwt.ts · logger.ts · config.ts
     storage.ts · auth-http.ts · session.ts
     supabase.ts         ← cliente de datos + wrapper estándar de peticiones
     auth-service.ts · profile-service.ts · answers-service.ts
   content/              Todo lo que toca la página
-    content.ts          orquestador (escanear → lógica pura → llenar → UI)
-    dom-fields.ts       escáner DOM y llenado + simulación de eventos React/Angular/Vue
-    assistant-ui.ts/.css  botón y panel en Shadow DOM
+    content.ts          orquestador (leer formulario → revisión → llenar → revisar lo vacío → resumen)
+    dom-fields.ts       escáner DOM y llenado + simulación de eventos React/Angular/Vue + fechas de 8 casillas
+    dom-actions.ts      acciones compartidas: clic, escribir, abrir/cerrar listas, ¿está marcado?
+    page-questions.ts   todos los campos vacíos del formulario abierto → preguntas; responderlas
+    complementary-form.ts  modal de datos complementarios de Magneto (preferencias)
+    assistant-ui.ts/.css  botón, aviso «Formulario detectado» y panel en Shadow DOM
   popup/popup.ts
 scripts/                build-env.mjs · sync-web-app.mjs · test.mjs
-tests/                  86 tests (node:test + jsdom)
+tests/                  107 tests (node:test + jsdom)
 sql/                    saved_answers.sql · verify_rls.sql
 web-app/                Web independiente (ver web-app/README.md)
 dist/                   ← GENERADO: es la extensión lista para cargar en Chrome
@@ -64,7 +71,7 @@ Requiere Node.js 20+.
 
 ```bash
 npm install
-npm run check      # typecheck (3 configuraciones) + 86 tests
+npm run check      # typecheck (3 configuraciones) + 107 tests
 npm run build      # producción → dist/
 ```
 
@@ -83,7 +90,7 @@ En Chrome: `chrome://extensions` → **Modo de desarrollador** → **Cargar desc
 
 **Lógica de negocio ↔ DOM.** `field-mapping.ts` y `question-detection.ts` reciben `FieldDescriptor[]` (datos planos y serializables) y devuelven `FieldMatch[]` / `DetectedQuestion[]`. Nunca ven un `Element`. `src/content/dom-fields.ts` es el único sitio que lee elementos (escaneo) y escribe en ellos (llenado). `tsconfig.pure.json` compila los módulos puros **sin la librería DOM**: si alguien referencia `document` o `HTMLElement` en ellos, `npm run typecheck` falla.
 
-**Llenado compatible con frameworks.** Se escribe con el setter del *prototype* (React instala un rastreador en la instancia y, si se asigna `el.value = x`, ignora el cambio) y se disparan `input` → `change` → `blur` → `focusout`. Nunca se pisa un campo con contenido; "Usar respuesta" (acción explícita) sí puede sustituir.
+**Llenado compatible con frameworks.** Se escribe con el setter del *prototype* (React instala un rastreador en la instancia y, si se asigna `el.value = x`, ignora el cambio) y se disparan `input` → `change` → `blur` → `focusout`. Nunca se pisa un campo con contenido.
 
 **Red y sesión.** Todas las peticiones pasan por `authenticatedRequest` (`shared/supabase.ts`):
 
@@ -111,7 +118,7 @@ En Chrome: `chrome://extensions` → **Modo de desarrollador** → **Cargar desc
 
 | | Original (sin minificar) | Ahora, desarrollo | Ahora, producción |
 |---|---|---|---|
-| `content.js` (se inyecta en cada página) | 805 KB | 161 KB | **42 KB** |
+| `content.js` (se inyecta en las páginas de Magneto) | 805 KB | — | **88 KB** |
 | `popup.js` | 795 KB | 140 KB | **30 KB** |
 
 ## Autorización
@@ -124,9 +131,34 @@ Nada se escribe en la página sin permiso. Al pulsar «H» (o «Autocompletar» 
 
 La fecha de nacimiento de Magneto (8 casillas de un dígito) aparece como una sola fila, «Fecha de nacimiento: DD/MM/AAAA», y también se puede quitar o corregir.
 
-Cancelar o cerrar el panel equivale a no autorizar: no se llena nada y las preguntas abiertas se siguen sugiriendo (esas ya requieren pulsar «Usar respuesta»).
+Cancelar o cerrar el panel equivale a no autorizar: no se llena nada.
 
-Para cualquier llenado nuevo (por ejemplo, el formulario de crear cuenta en Magneto), usa la misma puerta: arma una lista de `ConsentItem` y llama a `ui.requestConsent(items)` **antes** de escribir. Resuelve con los `ConsentApproval` (id + valor final) o con `null`.
+Para cualquier llenado nuevo (por ejemplo, el formulario de crear cuenta en Magneto), usa la misma puerta: arma la lista y llama a `ui.requestReview({ found, ask })` **antes** de escribir. Resuelve con lo autorizado (`approvals`: id + valor final), lo respondido (`answers`) y si se debe recordar, o con `null`.
+
+## Formulario completo
+
+La idea: que todo se haga desde el panel y la persona no tenga que buscar si quedó un campo vacío.
+
+1. **Qué formulario.** `findFormScope` toma la ventana de encima (Magneto no usa `role="dialog"`: sus ventanas son `div.mg_modal_magneto-ui-modal`); si no hay ninguna, la página sin encabezado, menús ni buscadores.
+2. **Qué falta.** `collectQuestions` convierte en pregunta todo campo vacío que no se llena desde el perfil:
+
+   | En la página | En el panel |
+   |---|---|
+   | texto, correo, teléfono, número; áreas de texto | caja de texto (área de texto para respuestas largas) |
+   | `<input type="date">` y fechas de 8 casillas de Magneto | texto DD/MM/AAAA |
+   | `<select>`, radios (con o sin `name`), `role="radio"` | botones de opción (más de 8 opciones: lista) |
+   | casillas sueltas / grupos de casillas | «Marcar esta casilla» / varias opciones |
+   | botones de Magneto (estado civil, disponibilidad) y tarjetas (modalidad) | botones de opción (varias si es disponibilidad, modalidad, idiomas…) |
+   | desplegables de Magneto (select2) | se abren, se leen sus opciones y se cierran con un clic fuera, **sin elegir nada**; si solo muestran un buscador (Cargo, Ciudad), se escribe y se elige la sugerencia más parecida |
+
+   La pregunta es la etiqueta del campo o el texto que va justo antes. En los desplegables de Magneto gana el nombre real del campo («Cargo equivalente»), salvo que sea una instrucción («Selecciona un género»). Las preguntas repetidas llevan su bloque: «Cargo equivalente · Control · App de organización personal». Los archivos no se suben: el resumen dice «Adjunta tú: …». Nunca se tocan contraseñas.
+3. **Propuestas.** Si el perfil tiene el dato (p. ej. «País» en una lista), la pregunta pasa a «Encontramos…». Si hay una respuesta guardada muy parecida, ya viene escrita; si se parece menos, se ofrece con «Usar mi respuesta guardada».
+4. **Revisión final.** Tras llenar se vuelve a leer el formulario: se pide otra vez lo que falló, lo obligatorio («*») y los campos nuevos que aparecieron (p. ej. al responder «Sí»), en una pantalla «Faltan N campos» con «Terminar». Lo opcional que la persona dejó en blanco no se vuelve a pedir: sale en el resumen final.
+5. **Recordar.** «Recordar mis respuestas para la próxima vez» (marcado por defecto) guarda cada respuesta nueva en `saved_answers` (categoría «Formulario»), sin duplicados.
+
+**Datos sensibles** (discapacidad, orientación sexual, etnia, salud, religión…, `isSensitiveQuestion`): se preguntan, pero nunca se proponen desde el perfil ni se guardan.
+
+**Aviso «Formulario detectado».** Un `MutationObserver` (con espera de 0,9 s) cuenta los campos vacíos sin abrir nada y muestra «Formulario detectado · N campos» junto al botón «H». En la página completa solo cuentan los campos dentro de un `<form>`, para no avisar por buscadores o filtros.
 
 ## Magneto: datos complementarios
 
